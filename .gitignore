@@ -1,0 +1,25 @@
+# data & artifacts (committed exception: the RWDB counts summary)
+data/**
+!data/**/
+!data/labels/rwdb_counts.json
+*.parquet
+*.npz
+checkpoints/
+runs/
+
+# secrets
+.env
+
+# python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# local tooling & OS noise
+.claude/
+.impeccable/
+desktop.ini
+Thumbs.db
