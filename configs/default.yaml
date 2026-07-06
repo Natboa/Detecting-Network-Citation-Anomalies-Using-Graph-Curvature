@@ -1,0 +1,35 @@
+seed_list: [0, 1, 2, 3, 4]
+
+data:
+  page_size: 100          # design for 100 per docs; live accepts 200 today
+  mailto: null            # set at S0.4 together with the API key registration email
+  max_retries: 5
+  backoff_base_s: 2.0
+
+slice: {}                 # filled by S1.3 -> configs/slice.yaml
+
+curvature:
+  screen_percentile_low: null    # set in S2.3
+  screen_percentile_high: null   # set in S2.3
+  orc_radius: null               # set in S2.3
+  orc_subgraph_edge_cap: 5000    # April-plan knob, revisit in S2.3
+  orc:
+    alpha: 0.5
+    method: OTDSinkhornMix
+    nbr_topk: 3000
+
+tgn:
+  node_feat_dim: 768
+  memory_projection_dim: null    # fallback knob if 768-dim memory is too heavy
+
+scoring:
+  cold_start_k: 3                # provisional (L19), finalized in S2.4
+  weights:                       # calibrated per-run in S3.2; these are inert defaults
+    s_embed: 1.0
+    s_geom: 1.0
+    s_temp: 1.0
+    s_curvdyn: 1.0
+
+eval:
+  cutoff_date: null              # set in S4.1
+  top_k: [100, 1000]

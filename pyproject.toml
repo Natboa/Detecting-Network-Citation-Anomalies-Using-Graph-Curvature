@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "citecurv"
+version = "0.0.1"
+description = "Citation anomaly detection with temporal GNNs and directed graph curvature"
+requires-python = ">=3.12"
+# Runtime deps are stage-specific and pinned per notebook/venv (see configs/pins.md).
+# The package imports heavy libraries lazily so any single stage env can install it.
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "numpy",
+    "pandas",
+    "pyarrow",
+    "networkx",
+    "pyyaml",
+    "pyalex==0.21",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
