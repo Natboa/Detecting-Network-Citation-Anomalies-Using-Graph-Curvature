@@ -1,0 +1,24 @@
+{
+  "total_records": 70771,
+  "original_doi_nonnull_rate": 0.9617,
+  "ref_attr_family": {
+    "records": 14896,
+    "unique_papers_with_doi": 14842,
+    "matching_reason_literals": {
+      "Concerns/Issues about Referencing/Attributions": 14896
+    }
+  },
+  "broadened_vocabulary": {
+    "Concerns/Issues about Referencing/Attributions": 14896,
+    "Paper Mill": 11796,
+    "Concerns/Issues about Peer Review": 11440,
+    "Compromised Peer Review": 11384,
+    "Taken via Peer Review": 23
+  },
+  "snapshot": {
+    "date": "2026-07-06",
+    "sha256": "ae6ea4b099440c85ac2044c897ccb113411bf68cff1fdb51678e3ad5e9d55ea7",
+    "source_url": "https://gitlab.com/crossref/retraction-watch-data/-/raw/main/retraction_watch.csv",
+    "filename": "rwdb_2026-07-06.csv"
+  }
+}
