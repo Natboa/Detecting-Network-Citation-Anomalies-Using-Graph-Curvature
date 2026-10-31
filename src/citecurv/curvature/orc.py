@@ -140,17 +140,13 @@ def cap_subgraph(G, u, v, edge_cap, prune=False):
     """
     tiers = edge_tiers(G, u, v)
     n_edges = G.number_of_edges()
-    ranked = sorted(
-        tiers,
-        key=lambda e: (tiers[e], -G.edges[e].get("t", 0), str(e[0]), str(e[1])),
-    )
-    if prune:
-        ranked = [e for e in ranked if tiers[e] <= 2]
-    capped = len(ranked) > edge_cap
-    kept = ranked[:edge_cap]
-    lossy = any(tiers[e] <= 2 for e in ranked[edge_cap:])
+    cand = [e for e, k in tiers.items() if k <= 2] if prune else list(tiers)
+    capped = len(cand) > edge_cap
     if not capped and not prune:
         return G, {"n_edges": n_edges, "n_kept": n_edges, "capped": False, "lossy": False}
+    cand.sort(key=lambda e: (tiers[e], -G.edges[e].get("t", 0), str(e[0]), str(e[1])))
+    kept = cand[:edge_cap]
+    lossy = any(tiers[e] <= 2 for e in cand[edge_cap:])
     H = nx.DiGraph()
     H.add_nodes_from([u, v])
     H.add_edges_from((a, b, G.edges[a, b]) for a, b in kept)

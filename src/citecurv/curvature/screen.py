@@ -230,7 +230,7 @@ def screen_report(curv, by=None, percentiles=(0.0, 0.01, 0.02, 0.05, 0.25, 0.5, 
     else:
         raise ValueError(f"unknown grouping {by!r}")
     rows = {}
-    for g, sub in df["forman"].groupby(key, sort=True):
+    for g, sub in df["forman"].groupby(key, sort=True, dropna=False):  # NaN group kept
         v = sub.dropna().to_numpy(float)
         row = {"n": int(v.size), "mean": float(v.mean()) if v.size else np.nan,
                "std": float(v.std(ddof=1)) if v.size > 1 else np.nan}
