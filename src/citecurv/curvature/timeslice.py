@@ -25,9 +25,17 @@ import networkx as nx
 
 class EventStore:
     def __init__(self, events):
-        """events: iterable of (src, dst, t) or a DataFrame with src/dst/t columns."""
+        """events: iterable of (src, dst, t), or a DataFrame with src_id/dst_id/t
+        (CONTRACTS.md events frame; other columns ignored) or src/dst/t columns."""
         if hasattr(events, "itertuples"):
-            rows = [(r.src, r.dst, int(r.t)) for r in events.itertuples(index=False)]
+            cols = events.columns
+            if "src_id" in cols and "dst_id" in cols:
+                s_col, d_col = "src_id", "dst_id"
+            elif "src" in cols and "dst" in cols:
+                s_col, d_col = "src", "dst"
+            else:
+                raise ValueError("events frame needs src_id/dst_id (or src/dst) and t columns")
+            rows = [(s, d, int(t)) for s, d, t in zip(events[s_col], events[d_col], events["t"])]
         else:
             rows = [(s, d, int(t)) for s, d, t in events]
         rows.sort(key=lambda e: e[2])
