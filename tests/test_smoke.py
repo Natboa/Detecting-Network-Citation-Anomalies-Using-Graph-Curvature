@@ -7,6 +7,7 @@ from citecurv.config import load_config
 MODULES = [
     "citecurv",
     "citecurv.config",
+    "citecurv.pipeline",
     "citecurv.data.openalex",
     "citecurv.data.abstracts",
     "citecurv.data.doi",
