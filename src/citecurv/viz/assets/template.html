@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>%%TITLE%%</title>
+<style>
+%%CSS%%
+</style>
+</head>
+<body>
+<div class="cx" id="%%ROOT%%">
+  <header class="cx-header">
+    <div class="cx-header__text">
+      <h1 class="cx-title">%%TITLE%%</h1>
+      <p class="cx-run" data-slot="run"></p>
+    </div>
+    <button type="button" class="cx-btn cx-theme" data-action="theme">Theme: auto</button>
+  </header>
+  %%BANNER%%
+  <noscript><p class="cx-card">This page needs JavaScript to draw its views. It makes no network requests.</p></noscript>
+  <nav class="cx-tabs" role="tablist" aria-label="Views"></nav>
+  <main class="cx-main" data-slot="panels"></main>
+  <div class="cx-tip" role="tooltip" hidden></div>
+  <script type="application/json" id="%%ROOT%%-data">%%DATA%%</script>
+  <script>
+%%JS%%
+  </script>
+</div>
+</body>
+</html>
