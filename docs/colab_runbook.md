@@ -93,29 +93,46 @@ Never paste the key into a cell, a commit, a screenshot or `PROGRESS.md`.
 
 ## 5. Drive layout and the few-large-files rule
 
-Everything lives under `MyDrive/citecurv/`:
+Every notebook uses one layout: `<DRIVE_ROOT>/citecurv/<RUN>/`, with `DRIVE_ROOT = /content/drive/MyDrive`
+and `RUN` = `pilot` (the S1.2 pilot slice) or `full` (the S4.0 slice). `RUN` is set in one cell of each
+notebook (the parameters cell of `10`, the Drive cell of `20`, `30` and `40`) and must have the same value in
+every notebook of a run; the notebooks call that folder `RUN_DIR`. Inside it, files carry the contract names
+(IMPLEMENTATION_PLAN.md section 3, CONTRACTS.md). Files shared by both runs stay one level up.
 
 ```text
 MyDrive/citecurv/
   smoke_report.json                     00, S0.5
   labels/rwdb_2026-07-06.csv            10, frozen label snapshot (SHA256 checked on every run)
-  labeled_works_openalex.parquet        10, S1.3 DOI lookup cache
+  labeled_works_openalex.parquet        10, S1.3 DOI lookup cache (also adds labelled cited works to event_labels)
   slice_measurements.json, slice.yaml   10, S1.3 (copy slice.yaml into configs/ and commit)
-  pilot/                                10, S1.2
-    year=2022/works.parquet, edges.parquet
-    works.parquet, edges.parquet, labels.parquet, join_stats.json
-  full/                                 10, S4.0
-    year=YYYY/works.parquet, edges.parquet
-    works.parquet, edges.parquet, labels.parquet, join_stats.json, dataset_manifest.json
-  works.parquet                         input of 20 and 30 (see section 10)
-  events.parquet                        input of 30 and 40 (see section 10)
-  split.parquet                         S4.1, optional input of 30
-  embeddings.npz                        20
-  embed_chunks/part_00000.npz ...       20, resume parts (about 15 for 300,000 works)
-  curvature_cache.parquet               30
-  screen_report_by_year.csv, screen_report_by_field.csv, escalation_budget.csv, screen_thresholds.json   30
-  runs/TGN_<name>_seed<s>/              40: checkpoint/, metrics.json, resolved_args.json, infer/
+  pilot/  or  full/                     RUN_DIR, one per run
+    year=YYYY/works.parquet, edges.parquet               10, one pull per publication year
+    year=YYYY/pull_state.json, pull_state_parts/         10, resume state of that year's pull (parts deleted after the merge)
+    works.parquet                       10, all years merged; input of 20, 30, 50
+    edges.parquet                       10, S1.1 contract (src_id, dst_id, t, doi_pair_key)
+    events.parquet                      10, contract events (event_id, src_id, dst_id, t); input of 30, 40, 50
+    labels.parquet                      10, doi_norm, reason_family, retraction_date, rwdb_snapshot_date
+    event_labels.parquet                10, event_id, label (L12, PROVISIONAL(G3)); input of 50
+    join_stats.json                     10, counts (copy into results/)
+    dataset_manifest.json               10, S4.0 only: counts and SHA256 of the five parquet files (commit it)
+    embeddings.npz                      20, ids + vectors (SPECTER2, 768 dimensions)
+    embed_chunks/part_00000.npz ...     20, resume parts (about 15 for 300,000 works)
+    split.parquet                       S4.1 (event_id, split); no notebook writes it yet; optional input of 30
+    curvature_cache.parquet             30
+    screen_report_by_year.csv, screen_report_by_field.csv, escalation_budget.csv, screen_thresholds.json   30
+    tgn/data/                           40, DyGLib files from to_jodie: ml_<RUN>.csv, .npy, _node.npy, _idmap.npz, _meta.json
+    tgn/runs/TGN_<RUN>_seed<s>/         40: checkpoint/, metrics.json, resolved_args.json,
+                                            infer/ (tgn_event_scores.parquet, tgn_event_embeddings.npz)
 ```
+
+`event_id` is assigned in one place, `citecurv.data.events.build_events`, which `10_data` calls: rows of
+`edges.parquet` are sorted by (t, src_id, dst_id) and numbered from 0, so the ids do not depend on the order
+in which OpenAlex returned pages; repeated (src_id, dst_id) pairs keep their earliest row. Never write an
+`events.parquet` by hand. `30` and `40` read it with `read_events`, which checks the contract.
+
+`50_eval` must read the same `RUN_DIR` (`events.parquet`, `event_labels.parquet`, `works.parquet`,
+`embeddings.npz`, `curvature_cache.parquet`, `tgn/runs/...`) and write the S4.1 `split.parquet` and its run
+folders there, so every artifact of a run is joined on the same `event_id`.
 
 Rules (plan 9.1):
 
