@@ -29,6 +29,8 @@ MODULES = [
     "citecurv.eval.inject",
     "citecurv.eval.ablation",
     "citecurv.eval.baselines.tier1_stats",
+    "citecurv.eval.baselines.tier2_xgb",
+    "citecurv.eval.baselines.pygod_tier",
 ]
 
 

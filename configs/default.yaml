@@ -105,3 +105,27 @@ inject:                          # S4.5 (citecurv.eval.inject)
   t_min: null                    # cutoff in days; every injected event has t >= t_min
   levels: [blatant, moderate, subtle]
   clique: {n_cliques: 10, clique_size: 15, drop_prob: 0.0}
+
+baselines:                       # S4.4 (citecurv.eval.baselines)
+  tier1:
+    window_days: 365             # burst_z trailing window W, days
+    min_venue_citers: 3          # venue_gini NaN below this many known-venue prior citers
+    max_ref_candidates: 20       # ref_overlap: most recent earlier citers of dst compared per event
+  tier2_xgb:
+    num_boost_round: 300
+    max_depth: 4
+    eta: 0.1
+    nthread: 1                   # 1 = reproducible; raise on Colab if speed matters
+  pygod:
+    undirected: true             # symmetrise snapshot (PROVISIONAL)
+    epoch: 100
+    hid_dim: 64
+    batch_size: 0                # 0 = full batch; >0 with num_neigh for large snapshots
+    num_neigh: -1
+  curvgad:
+    max_nodes: 10000             # PROVISIONAL node cap (dense N x N); not yet read by code
+    epochs: 200
+    patience: 100
+    lr: 0.01
+    K: 7
+    manifold_config: H32S32E32
