@@ -30,14 +30,20 @@ embed:                    # S1.6, citecurv.embed.specter2
   chunk_size: 20000               # resumable chunks on Drive
 
 curvature:
-  screen_percentile_low: null    # set in S2.3
-  screen_percentile_high: null   # set in S2.3
-  orc_radius: null               # set in S2.3
-  orc_subgraph_edge_cap: 5000    # April-plan knob, revisit in S2.3
+  screen_percentile_low: null      # S2.3: lower quantile level of training-row Forman, e.g. 0.01
+  screen_percentile_high: null     # S2.3: upper quantile level, e.g. 0.99
+  screen_inclusive_ties: false     # false: flag F < lo or F > hi; true: <= / >=
+  screen_count_duplicates: false   # false: duplicate (src,dst) rows count once in degrees
+  orc_radius: null                 # S2.3; 2 = exact time-t ORC, 1 = exact when src is uncited at t
+  orc_subgraph_edge_cap: 5000      # tiered truncation, lossless unless relevant edges exceed it
+  orc_prune: true                  # drop edges that cannot change unweighted ORC(u,v)
+  orc_escalate_chunk: 5000         # rows per checkpoint in notebooks/30
   orc:
     alpha: 0.5
-    method: OTDSinkhornMix
+    method: OTDSinkhornMix         # never ATD (ZeroDivisionError on uncited sources, both versions)
     nbr_topk: 3000
+    proc: 1
+    shortest_path: pairwise
 
 tgn:
   node_feat_dim: 768

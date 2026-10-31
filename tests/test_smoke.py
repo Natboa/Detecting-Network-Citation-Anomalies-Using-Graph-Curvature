@@ -16,6 +16,7 @@ MODULES = [
     "citecurv.embed.specter2",
     "citecurv.curvature.forman_directed",
     "citecurv.curvature.orc",
+    "citecurv.curvature.screen",
     "citecurv.curvature.timeslice",
     "citecurv.tgn.convert",
     "citecurv.tgn.train",
