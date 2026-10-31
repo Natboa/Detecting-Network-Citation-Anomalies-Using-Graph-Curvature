@@ -1,0 +1,102 @@
+{
+  "what": "S0.5 Block D gate + S4.4 PyGOD-tier smoke (synthetic data only)",
+  "run_at_utc": "2026-10-31T18:25:24Z",
+  "environment": {
+    "python": "3.12.3",
+    "platform": "Linux-6.18.44-fc-v185-x86_64-with-glibc2.39",
+    "executable": "/home/user/venvs/a5-pygod/bin/python",
+    "torch": "2.15.0+cu132",
+    "torch_geometric": "2.6.1",
+    "pygod": "1.1.0",
+    "numpy": "2.5.4",
+    "pyg_lib": "not importable (ModuleNotFoundError)",
+    "torch_sparse": "0.6.18",
+    "torch_scatter": "2.1.2",
+    "cuda_available": false
+  },
+  "checks": {
+    "import_detectors": {
+      "imported": [
+        "DOMINANT",
+        "CoLA",
+        "GADNR"
+      ],
+      "status": "PASS",
+      "seconds": 0.0
+    },
+    "neighbor_sampler_backend": {
+      "backends": {
+        "pyg_lib": "missing (ModuleNotFoundError)",
+        "torch_sparse": "0.6.18"
+      },
+      "status": "PASS",
+      "seconds": 0.0
+    },
+    "gen_structural_outlier": {
+      "n_outlier_nodes": 10,
+      "edges_before": 150,
+      "edges_added": 20,
+      "expected_added": 20,
+      "added_edges_inside_cliques": true,
+      "one_direction_per_pair": true,
+      "note": "pygod 1.1.0 seeds the generator only when seed is truthy; seed=0 is not reproducible",
+      "status": "PASS",
+      "seconds": 0.003
+    },
+    "detector_DOMINANT": {
+      "n_scored": 586,
+      "epoch": 10,
+      "fit_and_score_seconds": 0.121,
+      "finite": true,
+      "rerun_max_abs_diff": 0.0,
+      "score_min": 5.175739288330078,
+      "score_max": 10.702550888061523,
+      "status": "PASS",
+      "seconds": 0.214
+    },
+    "detector_CoLA": {
+      "n_scored": 586,
+      "epoch": 10,
+      "fit_and_score_seconds": 0.068,
+      "finite": true,
+      "rerun_max_abs_diff": 0.0,
+      "score_min": -6.628387451171875,
+      "score_max": 1.1084117889404297,
+      "status": "PASS",
+      "seconds": 0.134
+    },
+    "detector_GADNR": {
+      "n_scored": 586,
+      "epoch": 10,
+      "fit_and_score_seconds": 2.981,
+      "finite": true,
+      "rerun_max_abs_diff": 0.0,
+      "score_min": 3.2043421268463135,
+      "score_max": 11139.2041015625,
+      "status": "PASS",
+      "seconds": 5.69
+    }
+  },
+  "synthetic_snapshot": {
+    "n_events": 2951,
+    "cutoff": 3070,
+    "n_test_events": 586,
+    "n_nodes": 400,
+    "feature_dim": 32,
+    "features": "random normal (synthetic stand-in)",
+    "n_events_used": 2365,
+    "n_events_dropped": 0,
+    "n_self_loops_removed": 0,
+    "n_edges": 4730,
+    "undirected": true
+  },
+  "score_pygod_adjustments": [
+    "DOMINANT: dense adjacency sized to all N nodes (upstream to_dense_adj without max_num_nodes raises IndexError when the highest-indexed nodes are isolated)",
+    "GADNR: backbone wrapper drops the stray tot_nodes keyword rejected by PyG >= 2.5 (removed upstream in pygod commit 9d97307, 2024-02-21, not released on PyPI)",
+    "GADNR: isolated nodes get a self-loop (full-batch preprocessing keeps only nodes present in edge_index)",
+    "GADNR: O(E) re-implementation of GADNRBase.process_graph with identical outputs (upstream is O(E*N))",
+    "GADNR: the multiprocessing.Pool(4) opened by GADNRBase.__init__ is terminated after scoring",
+    "all: detectors run on a copy of the snapshot (GADNR rewrites x and edge_index of its input in place)"
+  ],
+  "overall": "PASS"
+}
