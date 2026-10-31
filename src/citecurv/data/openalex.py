@@ -701,7 +701,7 @@ class _PartStore:
         shutil.rmtree(self.dir, ignore_errors=True)
 
 
-def _new_state(query, query_key, now):
+def _new_state(query_key, now):
     stamp = now().isoformat()
     st = {"version": STATE_VERSION, "query": json.loads(query_key), "query_key": query_key,
           "cursor": "*", "paging_complete": False, "done": False,
@@ -720,7 +720,7 @@ def _stats(st, pages_resumed):
 # --------------------------------------------------------------------------- pulls
 
 def pull_works(filters, out_dir, max_works=None, _pager=None, config=None, *, state_path=None,
-               pages_per_part=1, keep_parts=False, select=None,
+               pages_per_part=None, keep_parts=False, select=None,
                _fetch=None, _rate_limit=None, _now=None, _sleep=None) -> PullStats:
     """Pull works matching `filters` (pyalex kwargs) into out_dir/works.parquet + edges.parquet.
 
@@ -728,7 +728,8 @@ def pull_works(filters, out_dir, max_works=None, _pager=None, config=None, *, st
     configs/default.yaml); reads data.page_size (clamped to 100), max_retries, backoff_base_s,
     api_key_mode, max_requests_per_s, timeout_s, mailto. state_path: JSON file that makes the
     pull resumable (see the module docstring); without it nothing is saved until the end.
-    pages_per_part: pages per committed part (state written after each). keep_parts: keep the
+    pages_per_part: pages per committed part, state written after each (default
+    data.pages_per_part, else 1 = after every page). keep_parts: keep the
     part files after the merge. select: optional OpenAlex `select` field list.
     Raises ApiKeyMissing before any request when no key is set, and BudgetExhausted (with the
     reset time and the saved state) when a 429 turns out to be a spent daily budget.
@@ -754,6 +755,8 @@ def pull_works(filters, out_dir, max_works=None, _pager=None, config=None, *, st
         rate_limit = client.rate_limit
     else:
         fetch, rate_limit = _fetch, _rate_limit
+    if pages_per_part is None:
+        pages_per_part = data_cfg.get("pages_per_part") or 1
     if int(pages_per_part) < 1:
         raise ValueError("pages_per_part must be >= 1")
     return _pull_cursor(filters, out, max_works, data_cfg, per_page, fetch, rate_limit, select=select,
@@ -786,7 +789,7 @@ def _pull_cursor(filters, out, max_works, data_cfg, per_page, fetch, rate_limit,
     store = _PartStore(state_path) if state_path is not None else None
     st = store.load(query_key) if store else None
     if st is None:
-        st = _new_state(query, query_key, now)
+        st = _new_state(query_key, now)
     pages_resumed = st["pages"]
 
     if st["done"]:

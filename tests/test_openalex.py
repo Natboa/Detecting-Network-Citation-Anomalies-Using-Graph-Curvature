@@ -358,6 +358,17 @@ def test_resume_with_several_pages_per_part(tmp_path):
     assert_same_output(ref, tmp_path / "run")
 
 
+def test_pages_per_part_from_config_and_keep_parts(tmp_path):
+    cfg = {"data": {**CFG_C["data"], "pages_per_part": 2}}
+    state_path = tmp_path / "s.json"
+    pull_works({}, tmp_path, config=cfg, state_path=state_path, keep_parts=True,
+               _fetch=FakeOpenAlex(make_works(23)))
+    st = json.loads(state_path.read_text())
+    assert [p["pages"] for p in st["parts"]] == [2, 2, 1]
+    assert [p["cursor_in"] for p in st["parts"]] == ["*", "c10", "c20"]
+    assert (tmp_path / "s_parts" / "works_00002.parquet").exists()
+
+
 def test_resume_rolls_back_to_first_missing_part(tmp_path):
     """A part listed in the state but missing on disk (Drive sync lag) is fetched again."""
     works = make_works(23)

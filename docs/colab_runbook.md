@@ -124,8 +124,9 @@ Rules (plan 9.1):
 - Chunk folders are the exception and stay small: `embed_chunks/` holds one file per 20,000 works;
   a resumable OpenAlex pull keeps one pair of part files per page (by default) in
   `pull_state_parts/` next to its state file, and deletes them after the merge. A year bucket of
-  50,000 works is 500 pages, so 1,000 transient files; pass `pages_per_part=10` to `pull_works` to
-  cut that tenfold.
+  50,000 works is 500 pages, so 1,000 transient files; `pages_per_part=10` (argument of `pull_works`
+  or `data.pages_per_part` in the config) cuts that tenfold, at the price of fetching up to 9 pages
+  again after a crash.
 - Training work folders (`/content/tgn/...`) stay on the runtime's local disk and are copied to
   Drive once a step finishes.
 - Small result summaries (< 200 KB: counts, metrics, reports) are copied into `results/` in the
