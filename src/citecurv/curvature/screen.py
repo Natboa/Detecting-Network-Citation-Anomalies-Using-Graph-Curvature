@@ -197,8 +197,12 @@ def apply_screen(curv, thresholds) -> pd.DataFrame:
     gcol = thresholds.get("group_col")
     if gcol is not None and thresholds["groups"]:
         keys = out[gcol].astype(str)
-        lo = keys.map({g: c["lo"] for g, c in thresholds["groups"].items()}).fillna(pd.Series(lo, index=out.index)).to_numpy(float)
-        hi = keys.map({g: c["hi"] for g, c in thresholds["groups"].items()}).fillna(pd.Series(hi, index=out.index)).to_numpy(float)
+        groups = thresholds["groups"]
+        lo = np.array(keys.map({g: c["lo"] for g, c in groups.items()}), dtype=float)
+        hi = np.array(keys.map({g: c["hi"] for g, c in groups.items()}), dtype=float)
+        missing = np.isnan(lo)  # group without reference rows -> global cut-offs
+        lo[missing] = thresholds["global"]["lo"]
+        hi[missing] = thresholds["global"]["hi"]
     with np.errstate(invalid="ignore"):
         if thresholds.get("inclusive"):
             flag = (f <= lo) | (f >= hi)
@@ -212,7 +216,10 @@ def _pct_label(q):
     return f"p{100 * q:g}"
 
 
-def screen_report(curv, by=None, percentiles=(0.0, 0.01, 0.02, 0.05, 0.25, 0.5, 0.75, 0.95, 0.98, 0.99, 1.0)) -> pd.DataFrame:
+REPORT_PERCENTILES = (0.0, 0.01, 0.02, 0.05, 0.25, 0.5, 0.75, 0.95, 0.98, 0.99, 1.0)
+
+
+def screen_report(curv, by=None, percentiles=REPORT_PERCENTILES) -> pd.DataFrame:
     """Distribution of `forman`: n, mean, std and the requested percentiles.
 
     by: None (one row "all"), a column name of curv, or "year" (derived from t,
