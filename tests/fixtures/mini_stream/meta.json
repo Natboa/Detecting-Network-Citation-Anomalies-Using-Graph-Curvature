@@ -1,0 +1,29 @@
+{
+  "generator": {
+    "emb_dim": 16,
+    "n_fields": 2,
+    "n_works": 60,
+    "refs_mean": 3.5,
+    "seed": 7,
+    "years": [
+      2019,
+      2022
+    ]
+  },
+  "injection": {
+    "internal_density": 0.8,
+    "n_cartels": 1,
+    "reciprocity": 0.8,
+    "seed": 0,
+    "size_range": [
+      6,
+      6
+    ],
+    "window_days": 365
+  },
+  "n_events": 197,
+  "n_positive": 9,
+  "synthetic": true,
+  "t_min": 18628,
+  "t_min_date": "2021-01-01"
+}
