@@ -56,7 +56,17 @@ Ordered by impact. Each has a recorded default, so work does not stop while it i
   any real-data claim must beat those statistics, not only CurvGAD and the de-curvatured TGN.
 - The plan's curvature signals reduce exactly to reference-list counts at event time. Whether the
   book keeps them, replaces them, or reports the reduction as a finding is decision 1 in section 2.
-- See `docs/rehearsal_report.md` for the end-to-end numbers on synthetic data.
+- End-to-end rehearsal (`docs/rehearsal_report.md`, 4 levels × 3 seeds, real ORC): the full model
+  ranks planted cartels at or below chance on three of four levels (test AUROC 0.42-0.53) and works
+  on cliques (AUROC 0.86); the cited-paper-age control reaches 0.99 and XGBoost 0.89-0.997; removing
+  curvature changes nothing beyond seed noise. Causes found: s_temp is biased (ranks cartels below
+  average), cold start removes 34-89 % of positives, validation calibration has too few positives,
+  and the screen almost never sends cartel citations to ORC. The learned combiner beat calibrated
+  fixed weights on every level. These are design problems to fix before the real run, not verdicts
+  on real data; the report's section 9 lists ten concrete changes.
+- Fix before Stage 3 on real data (in this order): s_temp statistic (D6), age-matched injector,
+  calibration policy for few positives, cold-start coverage reporting, escalation rule, then rerun
+  `scripts/rehearsal.py`.
 
 ## 4. Order of work after the key arrives
 

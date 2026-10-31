@@ -11,34 +11,34 @@ Status values: `todo` · `in-progress` · `blocked(reason)` · `done(date)` · `
 | S0.1 Create GitHub repo | HUMAN | done(2026-07-06) | Gilboa made it public (existed private since 2026-03-21 — explains the July-2 404). Anonymous API 200, `main` default; `Maores` has `push: true`. Was empty — README/LICENSE created in S0.2. |
 | S0.2 Working folder → clone | | done(2026-07-06) | `git init -b main`, remote wired, explicit adds only (legacy files left untracked). First push `b8ecf30`; `.claude/`, `.impeccable/`, data all gitignored. |
 | S0.3 Package skeleton | | done(2026-07-06) | `.venv` Python 3.12.8; `pip install -e .[dev]` clean; pyalex exactly 0.21; smoke suite 2 passed. Commit `a8dfc73`. |
-| S0.4 OpenAlex key + cost meter | HUMAN part | todo | **Next human step (~5 min):** register at openalex.org/settings/api, set env `OPENALEX_API_KEY`, give me the mailto address for `configs/default.yaml`. Code side (env wiring + refuse-keyless guard) already done and tested in S1.1. |
-| S0.5 Smoke notebook (4 gates) | COLAB-RUN | todo | Next Claude task: write `notebooks/00_smoke.ipynb`; then Maor runs it on Colab (free tier fine). |
+| S0.4 OpenAlex key + cost meter | HUMAN part | todo | **Still the main blocker.** Key page moved to openalex.org/settings/api-key (2026-10 refresh). Code side 2026-10-31: key modes (bearer/param), `check_key()` via /rate-limit, BudgetExhausted on spent daily budget; `mailto` now ignored by OpenAlex. Verify step: run `check_key()` once (docs/colab_runbook.md §9). |
+| S0.5 Smoke notebook (4 gates) | COLAB-RUN | in-progress | 2026-10-31: `notebooks/00_smoke.ipynb` written (Python 3.12 gate first; Colab defaults to 3.13 since 2026-08-25). Run in the cloud container on CPU: Block A PASS (GRC 0.6.1 and 0.5.3.2), Block B PASS (vendored DyGLib, torch 2.15, synthetic 16k events, val AP 0.79), Block D PASS (pygod 1.1.0 + PyG 2.6.1 with 4 runtime fixes); Block C code path only (HF blocked). Remaining: one Colab run (T4) by Maor. |
 | S0.6 RWDB snapshot freeze + counts | | done(2026-07-06) | Snapshot 2026-07-06: 70,771 records; Ref/Attr family 14,896 records / 14,842 unique DOIs (exact literal: `Concerns/Issues about Referencing/Attributions`); broadened candidates recorded (Paper Mill 11,796; Concerns/Issues about Peer Review 11,440; Compromised Peer Review 11,384; Taken via Peer Review 23) — no "Fake Peer Review" or citation-manipulation literal exists. OriginalPaperDOI non-null 96.17%. SHA256 in `data/labels/rwdb_counts.json` (committed); CSV local-only. 4 tests. Commit `dcd5b98`. |
-| S0.7 Book carry-over fixes | | todo | parallel track, never blocks |
-| S1.1 Data pull harness | | in-progress | Code + 5 mocked tests done (pagination, 429 backoff, non-retryable raise, cost ledger, parquet contracts, keyless-refusal guard). Commit `aff6b63`. **Remaining:** live 2-page pull verify — blocked(S0.4 key). |
-| S1.2 Pilot pull + label join | | todo | blocked(S0.4 key) |
-| S1.3 Slice selection → slice.yaml | | todo | PROVISIONAL(G3) on rationale; needs S1.2 |
+| S0.7 Book carry-over fixes | | done(2026-10-31), review pending | Corrected copy `docs/book/..._S0.7.docx` + `docs/book/S0.7_changes.md`; extraction diff = 9 intended hunks only; refs alphabetical. Maor: open doi.org/10.1145/3669906 once, check page breaks in Word, pick typo candidates (items 1-4 likely the audit's three), compare with any local fixed copy. 8 book-vs-implementation contradictions listed, not edited. |
+| S1.1 Data pull harness | | in-progress | 2026-10-31 rewrite: requests-based paging (pyalex builds filters only), per_page ≤ 100, 429 → /rate-limit disambiguation → BudgetExhausted with resume state, resumable cursor (`state_path`, atomic part files), key never in error text. 30 mocked tests. **Remaining:** live 2-page pull — blocked(S0.4 key). |
+| S1.2 Pilot pull + label join | | todo | Code ready 2026-10-31: `rwdb.join_labels` (strict/loose + delta stats), `data.events.build_events` (order-independent event_id), `event_labels_from_rwdb`, `notebooks/10_data.ipynb` (RUN=pilot). blocked(S0.4 key). |
+| S1.3 Slice selection → slice.yaml | | todo | RWDB side done 2026-10-31 (`docs/slice_shortlist.md`, PROVISIONAL(G3)): computing 5,859 / cell-mol-bio 1,497 / env-energy 1,184 Ref/Attr papers (orig. 2018-23); 57.7 % Hindawi; 77.5 % in 32 batches; end slices in 2023. OpenAlex now uses topics (concepts frozen; topics replaced 2026-10-06) — queries prepared. blocked(S0.4 key) for counts. |
 | S1.4 Directed Forman module | | done(2026-07-06) | 3 tests green (6 hand cases, full-sweep consistency, weighted-unit-reduction over 3 seeded random graphs). Benchmark: 30,147 edges in 0.060 s (bar <5 s). Saucan-paper figure cases not attempted (paywalled source); covered by hand cases + S1.5 ORC cross-check. Commit `d37c785`. |
-| S1.5 Directed ORC validation | COLAB-RUN | todo | toy expectations ready in tests/test_forman_directed.py CASES |
-| S1.6 SPECTER2 encoding pilot | COLAB-RUN | todo | |
-| S1.7 DyGLib integration (pilot train) | COLAB-RUN | todo | |
-| S1.8 Text-init memory patch | optional | todo | default: skip unless S1.7 argues |
+| S1.5 Directed ORC validation | COLAB-RUN | done(2026-10-31, container CPU) | Both GRC 0.5.3.2 and 0.6.1: toy values match hand values, direction sensitivity holds, OTD vs OTDSinkhornMix max dev 0.0 (< 0.05), proc 1/2/4 no hang; unweighted values identical across versions (6.7e-16). ATD crashes — never use. Recommendation PROVISIONAL: pin 0.6.1 (`docs/orc_version_comparison.md`). Proposition: at event time ORC = −(1−α)(1 − coupling share). |
+| S1.6 SPECTER2 encoding pilot | COLAB-RUN | todo | Code + tests + `20_embed.ipynb` done 2026-10-31 (exact pins adapters==1.3.0 transformers==4.57.6; resumable chunks). Real weights untested (huggingface.co blocked in cloud). |
+| S1.7 DyGLib integration (pilot train) | COLAB-RUN | in-progress | 2026-10-31: DyGLib vendored @3aacc36 + PATCHES.md (P1 feature dims, P3 py3.11 crash, P4 torch.load, P5 direction-aware opt-in, P6, P7); convert/train/infer + leak hook (0 violations); CPU synthetic run test AP 0.834. Remaining: pilot training on real data (Colab). Maor: confirm P5. |
+| S1.8 Text-init memory patch | optional | skipped(default) | Patch location documented in PATCHES.md (MemoryBank.__init_memory_bank__). |
 | S2.1 EventStore (curvature-at-t) | | done(2026-07-06) | 7 tests green incl. 200-event × 2-radius brute-force sweep and scored-instance-exclusion cases. Benchmarks (synthetic 100k events / 5k nodes, denser than real citation data): subgraph_at 0.17 ms r=1 / 10.15 ms r=2 per event; build 92 ms; full degrees advance 54 ms. Commit `c1ed353`. |
-| S2.2 Forman screen sweep | | todo | needs pilot data (S1.2) |
-| S2.3 Threshold/radius/cap sweep | COLAB-RUN | todo | |
-| S2.4 Cold-start k | | todo | provisional k=3 active |
-| S2.5 Latency measurement (NFR2) | | todo | |
-| S3.1 Component definitions + impl | HUMAN review of note | todo | |
-| S3.2 Combiner (fixed weights) | | todo | |
-| S3.3 Breakdown/aggregation/export | | todo | |
-| S3.4 Integrated pilot + sanity gates | COLAB-RUN | todo | |
-| S4.0 Full-slice pull + preprocess | COLAB-RUN | todo | |
-| S4.1 Time split | | todo | |
-| S4.2 Main training runs (5 seeds) | COLAB-RUN | todo | |
-| S4.3 Ablation matrix (25 + shuffle) | COLAB-RUN | todo | |
-| S4.4 Baselines (3 tiers + CurvGAD) | COLAB-RUN | todo | |
-| S4.5 Cartel injection track | | todo | |
-| S4.6 Metrics + results tables | | todo | |
+| S2.2 Forman screen sweep | | in-progress | `curvature/screen.py` done 2026-10-31 (1M events 0.71 s, brute-force cross-checked). Proposition: at event time F = 2 − refs(v). Pilot sweep needs data. |
+| S2.3 Threshold/radius/cap sweep | COLAB-RUN | todo | Tooling done (`orc.escalation_budget`; synthetic demo 0.017 s/event r1). Real calibration needs pilot. |
+| S2.4 Cold-start k | | todo | Implemented (k=3, D8 off-by-one noted). Rehearsal: k=3 removes 34-89 % of planted positives — report coverage. |
+| S2.5 Latency measurement (NFR2) | | todo | Components alone: p50 0.42 ms / p95 0.58 ms per event (synthetic); TGN read + curvature-at-t still to add. |
+| S3.1 Component definitions + impl | HUMAN review of note | in-progress | `docs/score_components.md` PROVISIONAL (D1-D12 + 2026-10-31 curvature update) + `scoring/components.py` done. Rehearsal: s_temp (D6) biased — ranks cartels below average; fix before real run. Maor's review = the gate. |
+| S3.2 Combiner (fixed weights) | | done(2026-10-31, code) | ZStats train-only, simplex grid calibration, learned logistic head; 21 tests. Rehearsal: calibration unstable with few val positives; learned head won every level. |
+| S3.3 Breakdown/aggregation/export | | done(2026-10-31, code) | write/read scores contract, paper/author rollups, CSV export; + interactive explorer `citecurv.viz` (single offline HTML). |
+| S3.4 Integrated pilot + sanity gates | COLAB-RUN | in-progress | `pipeline.py` + `50_eval.ipynb` + gates done; synthetic rehearsal: reproducibility PASS, cold-start 12/12, D4 12/12, top-20 12/12, shuffle 2/4 (explained). Real pilot needs data. |
+| S4.0 Full-slice pull + preprocess | COLAB-RUN | todo | Resumable per-year pulls + manifest hashing in `10_data` (RUN=full). |
+| S4.1 Time split | | done(2026-10-31, code) | `choose_cutoff` / `split_events` / `write_split_yaml`; 27 tests. Cutoff on real data pending. |
+| S4.2 Main training runs (5 seeds) | COLAB-RUN | todo | Driver ready (`eval/ablation.py run_matrix`, resume). |
+| S4.3 Ablation matrix (25 + shuffle) | COLAB-RUN | todo | Variants + `--tables` regeneration done; rehearsed on synthetic (curvature delta within noise). D11 PROVISIONAL. |
+| S4.4 Baselines (3 tiers + CurvGAD) | COLAB-RUN | in-progress | Tier 1 (3M events 38 s), tier 2 XGBoost, PyGOD tier (4 runtime fixes) done; CurvGAD sealed-env recipe written, not executed ("as released" differs from paper). Add cited-age + coupling controls as named baselines (rehearsal + curvature study). |
+| S4.5 Cartel injection track | | done(2026-10-31, code) | CIDRE donor/recipient injector + obviousness presets + clique variant; 16 tests. Finding: cited-paper age alone separates planted cartels (AUROC 0.94-0.99) → add age-matched variant. |
+| S4.6 Metrics + results tables | | in-progress | `ranking_metrics` (AUROC/AP vs sklearn 1e-12) + tables regenerated from run artifacts (`--tables`, byte-identical from bundle). Real tables pending. |
 | S4.7 Top-50 manual review | HUMAN | todo | |
 | S4.8 Success-criteria checkpoint | | todo | |
 | S4.9 Results pack + book hooks | | todo | |
@@ -47,18 +47,23 @@ Status values: `todo` · `in-progress` · `blocked(reason)` · `done(date)` · `
 
 | Gate | Question | Owner | Default in force | Status |
 |------|----------|-------|------------------|--------|
-| G1 | Colab Pro vs Pro+ | Maor → college | Pro (chunked runs) | open — Maor considering Pro+ (~162 ₪/mo); buying it closes this gate |
+| G1 | Colab Pro vs Pro+ | Maor → college | Pro (chunked runs) | open — Maor considering Pro+ (~162 ₪/mo); buying it closes this gate. 2026-10 refresh: Colab is now part of Google AI plans (snippet-level, see docs/literature_refresh_2026-10.md) |
 | G2 | Notebooks: deliverable or venue only | Maor → advisors | venue only | open |
 | G3 | Label-rule sign-off (Referencing/Attributions) | Maor → advisors | Ref/Attr family — exact literal now known: `Concerns/Issues about Referencing/Attributions` | open |
 | G4 | Audit Q1 — solution-description section in book | Maor → advisors | assume required later | open |
 | G5 | Audit Q2 — page-limit accounting | Maor → advisors | book track only | open |
+| G7 | Curvature formulation (new 2026-10-31): plan's event-time Forman/ORC reduce to reference-list counts | Maor → advisors | keep plan formulation, add counting controls as named baseline, re-test on real slice | open — docs/curvature_formulation_study.md options |
+| G8 | Score-component definitions D1-D12 (S3.1 gate) incl. s_temp fix (D6), D8 cold-start, D11 no_temporal | Maor | as in docs/score_components.md | open |
+| G9 | Smaller pending choices: RWDB Oct snapshot vs July; Retraction-only positives; GRC pin 0.6.1; DyGLib P5 direction patch; PyGOD undirected snapshot; DOMINANT/CurvGAD node cap | Maor | July snapshot; Retraction-only; 0.5.3.2 pin until decided; P5 on; undirected; cap 10k | open — docs/NEXT_STEPS.md §2 |
 | G6 | Repo visibility timing | Maor + Gilboa | public at creation | resolved(2026-07-06): public — note the plan and progress files are world-readable |
 
 ## Provisional outputs
 
 | Artifact | Provisional under | Cleared when |
 |----------|-------------------|--------------|
-| (none yet) | | |
+| docs/slice_shortlist.md, label counts | PROVISIONAL(G3) | advisors sign off the label rule |
+| docs/score_components.md, configs scoring.components | PROVISIONAL(G8) | Maor approves the S3.1 note |
+| docs/curvature_formulation_study.md, docs/rehearsal_report.md | synthetic data only | real-slice rerun |
 
 ## Unit-burn log (Colab)
 
@@ -67,6 +72,8 @@ Status values: `todo` · `in-progress` · `blocked(reason)` · `done(date)` · `
 | (none yet) | | | |
 
 ## Session log
+
+- 2026-10-31 (cloud session, Claude Code on the web; Maor asked for autonomous progress with the cloud credits) — 13 parallel agents + integration on branch `claude/amazing-archimedes-1tu9ny`. Suite: **25 → 483+ tests passing** (Python 3.12 venv; torch/GRC/pygod tests pass in their own venvs). Implemented every offline module: metrics, split, combiner, rollups/export, Forman screen, ORC wrapper + escalation + budget tool, DyGLib vendoring + converter/train/infer + leak hook, synthetic stream + CIDRE injector + fixture, three baseline tiers, four score components + note, SPECTER2 encoder, RWDB refresh + slice shortlist + label join, events builder, OpenAlex harness rewrite (resumable, budget-aware), pipeline + ablation driver, interactive explorer, six notebooks + Colab runbook, book S0.7 corrected copy, literature/tooling refresh. Key findings: (1) at event time the plan's Forman screen = 2 − refs(v) and directed ORC = −(1−α)(1 − coupling share) — curvature study shows no tested formulation beats simple counting controls on synthetic cartels (`docs/curvature_formulation_study.md`); (2) synthetic rehearsal: full model at/below chance on 3 of 4 levels, curvature removal within noise, s_temp biased, cold start drops 34-89 % of positives (`docs/rehearsal_report.md`); (3) Colab now defaults to Python 3.13; OpenAlex concepts frozen → topics; DyGLib needed py3.11 + torch patches. Not done: anything on real data (S0.4 key), Colab runs, CurvGAD execution (blocked by the session's permission check). Push to GitHub refused (403: Claude GitHub App not installed on the repo) — work delivered as a git bundle. **Next:** `docs/NEXT_STEPS.md`.
 
 - 2026-07-06 (execution session) — Go received; executed S0.2, S0.3, S0.6, S1.1 (code), S1.4, S2.1 with TDD (red observed before every implementation). Suite: **25 tests passed**. Six commits pushed to `main`. One data-reality correction: RWDB has no "Fake Peer Review" literal — real peer-review literals recorded in rwdb_counts.json; broadened-family candidates now come from the live vocabulary. **Next:** (human, ~5 min) S0.4 OpenAlex key + mailto → unblocks S1.1-live + S1.2; (Claude) S0.5 smoke notebook, then S1.2/S1.3 once the key lands. S0.7 book fixes available any session.
 - 2026-07-06 (later) — S0.1 done: repo public and push access confirmed from this machine (`Maores` collaborator). Book audit's 404-link item resolved by the same act. S0.2 was the next Claude task, awaiting go (first push = public).
