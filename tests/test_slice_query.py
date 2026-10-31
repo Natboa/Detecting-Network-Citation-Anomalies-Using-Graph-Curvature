@@ -485,3 +485,122 @@ def test_topic_candidate_keeps_rwdb_side_and_swaps_filter():
     assert c["openalex"]["filter"] == {"primary_topic": {"id": "T4|T1"}}
     assert openalex_count_queries(c)[0]["filter"]["publication_year"] == "2020-2023"
     assert CAND_CS["openalex"]["filter"] == {"primary_topic": {"subfield": {"id": "1702"}}}
+
+
+# ---------- default fetch path: the S1.1 OpenAlex client (key modes, BudgetExhausted) ----------
+# Spec: _default_fetch builds its requests with citecurv.data.openalex.make_client, so the key goes
+# in the Bearer header or the api_key parameter by key mode, a missing key refuses before any
+# request, and a 429 whose /rate-limit check shows a spent budget raises BudgetExhausted (no retry).
+# HTTP comes from a fake session; no network.
+
+from urllib.parse import parse_qs, urlsplit  # noqa: E402
+
+from citecurv.data.openalex import BudgetExhausted  # noqa: E402
+from citecurv.data.slice_query import _default_fetch, lookup_labeled_works  # noqa: E402
+
+KEY = "sk-test-SECRET-9876"
+FETCH_CFG = {"data": {**CFG["data"], "max_requests_per_s": 0}}
+
+
+class _Resp:
+    def __init__(self, status, payload, headers=None):
+        self.status_code, self._payload, self.headers = status, payload, headers or {}
+
+    def json(self):
+        return self._payload
+
+
+class _Session:
+    """Records (url, headers); answers through a callable(url) -> _Resp."""
+
+    def __init__(self, answer):
+        self.answer, self.requests = answer, []
+
+    def get(self, url, headers=None, timeout=None):
+        self.requests.append((url, dict(headers or {})))
+        return self.answer(url)
+
+
+def _rate_limit_payload(remaining):
+    return {"rate_limit": {"credits_limit": 10000, "credits_used": 10000 - remaining,
+                           "credits_remaining": remaining, "resets_in_seconds": 3600}}
+
+
+def test_default_fetch_bearer_mode_group_by_query(monkeypatch):
+    monkeypatch.setenv("OPENALEX_API_KEY", KEY)
+    monkeypatch.delenv("OPENALEX_KEY_MODE", raising=False)
+    s = _Session(lambda url: _Resp(200, {"meta": {"count": 3}, "group_by": [{"key": "2022", "count": 3}]}))
+    fetch = _default_fetch(FETCH_CFG["data"], session=s)
+    q = openalex_count_queries(CAND_CS)[0]                       # works_by_year
+    assert fetch(q) == {"meta": {"count": 3}, "group_by": [{"key": "2022", "count": 3}]}
+    url, headers = s.requests[0]
+    assert headers["Authorization"] == f"Bearer {KEY}" and KEY not in url
+    parts = urlsplit(url)
+    assert parts.path == "/works"
+    qs = parse_qs(parts.query)
+    assert qs["group_by"] == ["publication_year"]
+    assert qs["filter"] == [filter_to_string(q["filter"])]
+    assert callable(fetch.rate_limit)
+
+
+def test_default_fetch_param_mode_sample_select_page(monkeypatch):
+    monkeypatch.setenv("OPENALEX_API_KEY", KEY)
+    monkeypatch.setenv("OPENALEX_KEY_MODE", "param")
+    s = _Session(lambda url: _Resp(200, {"meta": {}, "results": [{"id": "https://openalex.org/W1"}]}))
+    fetch = _default_fetch(FETCH_CFG["data"], session=s)
+    q = next(x for x in openalex_count_queries(CAND_CS, sample_n=40, seed=7) if x["name"] == "refcount_sample")
+    assert fetch(q)["results"] == [{"id": "https://openalex.org/W1"}]
+    url, headers = s.requests[0]
+    assert "Authorization" not in headers
+    qs = parse_qs(urlsplit(url).query)
+    assert qs["api_key"] == [KEY]
+    assert (qs["sample"], qs["seed"], qs["per-page"]) == (["40"], ["7"], ["40"])
+    assert qs["select"] == ["id,publication_year,referenced_works"]
+
+
+def test_default_fetch_refuses_keyless_before_any_request(monkeypatch):
+    monkeypatch.delenv("OPENALEX_API_KEY", raising=False)
+    s = _Session(lambda url: _Resp(200, {}))
+    with pytest.raises(ApiKeyMissing):
+        _default_fetch(FETCH_CFG["data"], session=s)
+    assert s.requests == []
+
+
+def test_measure_slice_spent_budget_raises_budget_exhausted_without_retry(monkeypatch):
+    monkeypatch.setenv("OPENALEX_API_KEY", KEY)
+
+    def answer(url):
+        if "/rate-limit" in url:
+            return _Resp(200, _rate_limit_payload(0))
+        return _Resp(429, {"error": "Rate limit exceeded"})
+
+    s = _Session(answer)
+    with pytest.raises(BudgetExhausted) as info:
+        measure_slice(CAND_CS, pager=_default_fetch(FETCH_CFG["data"], session=s), config=FETCH_CFG)
+    assert [("/rate-limit" in u) for u, _ in s.requests] == [False, True]   # one call, one check, no retry
+    assert KEY not in str(info.value)
+
+
+def test_lookup_labeled_works_retries_a_too_fast_429(monkeypatch):
+    monkeypatch.setenv("OPENALEX_API_KEY", KEY)
+    state = {"n": 0}
+    work = {"id": "https://openalex.org/W7", "doi": "https://doi.org/10.1/A", "publication_year": 2022,
+            "primary_topic": {"id": "https://openalex.org/T10",
+                              "subfield": {"id": "https://openalex.org/subfields/1702"},
+                              "field": {"id": "https://openalex.org/fields/17"}},
+            "primary_location": {"source": {"id": "https://openalex.org/S5"}}}
+
+    def answer(url):
+        if "/rate-limit" in url:
+            return _Resp(200, _rate_limit_payload(500))
+        state["n"] += 1
+        if state["n"] == 1:
+            return _Resp(429, {"error": "Too many requests"})
+        return _Resp(200, {"meta": {}, "results": [work]})
+
+    s = _Session(answer)
+    df, stats = lookup_labeled_works(["10.1/a"], pager=_default_fetch(FETCH_CFG["data"], session=s),
+                                     config=FETCH_CFG)
+    assert df["work_id"].tolist() == ["W7"] and df["subfield_id"].tolist() == ["1702"]
+    assert stats == {"dois_queried": 1, "works_returned": 1, "dois_found": 1, "calls": 1}
+    assert [("/rate-limit" in u) for u, _ in s.requests] == [False, True, False]

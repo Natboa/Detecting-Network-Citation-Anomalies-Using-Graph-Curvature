@@ -43,7 +43,6 @@ choice of slice does use label density by design (L11); the time split
 
 from datetime import date
 from math import ceil
-import os
 import re
 
 FAMILIES = {
@@ -536,31 +535,42 @@ def label_doi_queries(candidate, dois, batch_size=50) -> list[dict]:
     return out
 
 
-def _default_fetch(data_cfg):
-    """pyalex-backed pager: query dict -> {'meta', 'group_by' | 'results'}."""
-    import pyalex
+def _default_fetch(data_cfg, *, session=None):
+    """Keyed pager over the S1.1 client: query dict -> {'meta', 'group_by' | 'results'}.
 
-    from citecurv.data.openalex import ApiKeyMissing
+    Requests go through citecurv.data.openalex.make_client, so the key handling is the same as
+    in pull_works: OPENALEX_API_KEY is required (ApiKeyMissing before any request), key mode
+    argument > env OPENALEX_KEY_MODE > data.api_key_mode > "bearer", the client throttle
+    (data.max_requests_per_s) applies and error messages never contain the key. The filter is
+    encoded by pyalex exactly as in pull_works. The returned callable carries the client's
+    `rate_limit` method as an attribute; measure_slice and lookup_labeled_works pass it to the
+    retry wrapper, so a 429 caused by a spent daily budget raises BudgetExhausted at once instead
+    of being retried. `session` is a test seam (an object with requests.Session.get's signature).
+    """
+    from urllib.parse import quote_plus
 
-    key = os.environ.get("OPENALEX_API_KEY")
-    if not key:
-        raise ApiKeyMissing("OPENALEX_API_KEY is not set; refusing a silent keyless call (task S0.4)")
-    pyalex.config.api_key = key
-    if data_cfg.get("mailto"):
-        pyalex.config.email = data_cfg["mailto"]
+    from citecurv.data.openalex import _filter_query, make_client
+
+    client = make_client(data_cfg, session=session)
 
     def fetch(query):
-        q = pyalex.Works().filter(**query["filter"])
+        select = query.get("select")
+        if isinstance(select, str):
+            select = [s.strip() for s in select.split(",") if s.strip()]
+        parts = [p for p in (_filter_query("works", query["filter"], select=select),) if p]
         if query.get("group_by"):
-            q = q.group_by(query["group_by"])
+            parts.append(f"group_by={quote_plus(str(query['group_by']))}")
         if query.get("sample"):
-            q = q.sample(query["sample"], seed=query.get("seed"))
-        if query.get("select"):
-            q = q.select(query["select"])
-        resp = q.get(per_page=query.get("per_page"))
+            parts.append(f"sample={int(query['sample'])}")
+            if query.get("seed") is not None:
+                parts.append(f"seed={int(query['seed'])}")
+        if query.get("per_page"):
+            parts.append(f"per-page={int(query['per_page'])}")
+        resp, _headers = client.get(query.get("endpoint") or "works", "&".join(parts))
         field = "group_by" if query.get("group_by") else "results"
-        return {"meta": dict(resp.meta or {}), field: [dict(r) for r in resp]}
+        return {"meta": dict(resp.get("meta") or {}), field: list(resp.get(field) or [])}
 
+    fetch.rate_limit = client.rate_limit
     return fetch
 
 
@@ -628,7 +638,8 @@ def lookup_labeled_works(dois, pager=None, config=None, batch_size=50):
     for q in doi_lookup_queries(dois, batch_size=batch_size):
         calls += 1
         queried += q["n_dois"]
-        for w in _with_backoff(lambda q=q: fetch(q), data_cfg).get("results") or []:
+        resp = _with_backoff(lambda q=q: fetch(q), data_cfg, rate_limit=getattr(fetch, "rate_limit", None))
+        for w in resp.get("results") or []:
             topic = w.get("primary_topic") or {}
             source = (w.get("primary_location") or {}).get("source") or {}
             rows.append({
@@ -707,8 +718,10 @@ def measure_slice(candidate, pager=None, dois=None, config=None, batch_size=50,
     """Run the count queries for one candidate and check the S1.3 criteria.
 
     pager: callable(query dict) -> response dict ({'meta', 'group_by'} or
-    {'meta', 'results'}); default = pyalex with OPENALEX_API_KEY (refuses to
-    run keyless). Every call goes through the S1.1 retry/backoff wrapper.
+    {'meta', 'results'}); default = the S1.1 OpenAlex client with
+    OPENALEX_API_KEY (_default_fetch: refuses to run keyless, honours the key
+    mode). Every call goes through the S1.1 retry/backoff wrapper; with the
+    default pager a 429 from a spent daily budget raises BudgetExhausted.
     dois: normalized DOIs of labeled papers (e.g. every family DOI with an
     original year near the slice); None skips the labeled counts.
     Returns a dict of measured counts, cost estimates and `criteria` flags:
@@ -727,7 +740,7 @@ def measure_slice(candidate, pager=None, dois=None, config=None, batch_size=50,
     def run(q):
         nonlocal calls
         calls += 1
-        return _with_backoff(lambda: fetch(q), data_cfg)
+        return _with_backoff(lambda: fetch(q), data_cfg, rate_limit=getattr(fetch, "rate_limit", None))
 
     resp = {q["name"]: run(q) for q in openalex_count_queries(candidate, sample_n=sample_n, seed=seed)}
     works_by_year = _year_counts(resp["works_by_year"])
