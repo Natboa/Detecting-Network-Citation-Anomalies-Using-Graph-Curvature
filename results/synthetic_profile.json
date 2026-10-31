@@ -1,0 +1,186 @@
+{
+  "synthetic": true,
+  "n_works": 20000,
+  "n_events": 495403,
+  "refs_per_paper": {
+    "mean": 24.7702,
+    "median": 20.0,
+    "p90": 44.0,
+    "p99": 100.0,
+    "max": 385.0,
+    "share_zero": 0.0003,
+    "mean_if_citing": 24.7788
+  },
+  "in_degree": {
+    "mean": 24.7702,
+    "median": 9.0,
+    "p90": 47.0,
+    "p99": 352.0,
+    "max": 1038.0,
+    "share_uncited": 0.1138,
+    "gini": 0.7084,
+    "top1pct_share": 0.2247
+  },
+  "field_mix": {
+    "works_share": {
+      "F00": 0.2105,
+      "F01": 0.1822,
+      "F02": 0.1704,
+      "F03": 0.1321,
+      "F04": 0.128,
+      "F05": 0.0855,
+      "F06": 0.0843,
+      "F07": 0.007
+    },
+    "within_field_event_share": 0.8824
+  },
+  "reciprocity_paper": 0.0,
+  "citation_age_years": {
+    "median": 6.2313,
+    "p10": 1.3388,
+    "p90": 14.1437,
+    "mean": 7.0501
+  },
+  "works_per_year": {
+    "2005": 625,
+    "2006": 651,
+    "2007": 677,
+    "2008": 704,
+    "2009": 732,
+    "2010": 761,
+    "2011": 791,
+    "2012": 823,
+    "2013": 856,
+    "2014": 890,
+    "2015": 926,
+    "2016": 963,
+    "2017": 1002,
+    "2018": 1042,
+    "2019": 1083,
+    "2020": 1127,
+    "2021": 1172,
+    "2022": 1219,
+    "2023": 1267,
+    "2024": 1318,
+    "2025": 1371
+  },
+  "growth_cagr": 0.0401,
+  "self_citation_rate": 0.0802,
+  "reciprocity_author": 0.0839,
+  "authors": {
+    "n_authors": 18040,
+    "team_size_mean": 2.9931,
+    "papers_per_author": {
+      "mean": 3.3182,
+      "median": 2.0,
+      "p90": 7.0,
+      "p99": 23.0,
+      "max": 196.0
+    }
+  },
+  "n_venues": 48,
+  "embedding_cosine": {
+    "intra_field": 0.4697,
+    "inter_field": 0.072,
+    "cited_pairs": 0.462,
+    "cited_pairs_same_field": 0.5147
+  },
+  "params": {
+    "n_works": 20000,
+    "n_fields": 8,
+    "years": [
+      2005,
+      2025
+    ],
+    "refs_mean": 25,
+    "emb_dim": 64,
+    "seed": 0,
+    "growth_rate": 0.04,
+    "field_concentration": 4.0,
+    "cross_field_rate": 0.1,
+    "noise_rate": 0.02,
+    "self_cite_rate": 0.08,
+    "pa_offset": 1.0,
+    "pa_exponent": 1.0,
+    "ageing_rise_years": 0.5,
+    "ageing_decay_years": 6.0,
+    "refs_sigma": 0.6,
+    "review_rate": 0.02,
+    "review_factor": 4.0,
+    "authors_mean": 3.0,
+    "new_author_prob": 0.3,
+    "career_mean_years": 8.0,
+    "author_activity_sigma": 1.0,
+    "venues_per_field": 6,
+    "venue_zipf": 1.0,
+    "n_subtopics": 8,
+    "subtopic_affinity": 5.0,
+    "emb_global": 0.5,
+    "emb_field": 1.0,
+    "emb_subtopic": 0.8,
+    "emb_drift": 0.5,
+    "emb_noise": 1.0
+  },
+  "injection_check": {
+    "note": "synthetic; single-feature AUROC / AP on events with t >= t_min",
+    "t_min_date": "2021-01-01",
+    "n_cartels": 10,
+    "blatant": {
+      "preset": {
+        "size_range": [
+          15,
+          25
+        ],
+        "internal_density": 0.6,
+        "reciprocity": 0.9,
+        "window_days": 365
+      },
+      "n_injected": 1245,
+      "positive_share_post_t_min": 0.0078,
+      "realized_density": 0.5701,
+      "auroc_recency": 0.9905,
+      "ap_recency": 0.3319,
+      "auroc_embed_dissimilarity": 0.5157,
+      "ap_embed_dissimilarity": 0.0073,
+      "auroc_same_field": 0.5584
+    },
+    "moderate": {
+      "preset": {
+        "size_range": [
+          10,
+          20
+        ],
+        "internal_density": 0.35,
+        "reciprocity": 0.6,
+        "window_days": 730
+      },
+      "n_injected": 251,
+      "positive_share_post_t_min": 0.0016,
+      "realized_density": 0.2331,
+      "auroc_recency": 0.9796,
+      "ap_recency": 0.0484,
+      "auroc_embed_dissimilarity": 0.4969,
+      "ap_embed_dissimilarity": 0.0014,
+      "auroc_same_field": 0.5584
+    },
+    "subtle": {
+      "preset": {
+        "size_range": [
+          8,
+          15
+        ],
+        "internal_density": 0.2,
+        "reciprocity": 0.3,
+        "window_days": 1460
+      },
+      "n_injected": 51,
+      "positive_share_post_t_min": 0.0003,
+      "realized_density": 0.0792,
+      "auroc_recency": 0.9384,
+      "ap_recency": 0.0038,
+      "auroc_embed_dissimilarity": 0.4864,
+      "ap_embed_dissimilarity": 0.0003,
+      "auroc_same_field": 0.5584
+    }
+  }
+}
