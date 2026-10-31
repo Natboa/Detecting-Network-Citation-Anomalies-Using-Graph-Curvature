@@ -468,6 +468,26 @@ def test_matched_random_escalation():
     assert set(a) <= set(curv["event_id"]) and len(set(a)) == len(a)
 
 
+def test_matched_random_escalation_per_stratum_ignores_other_strata():
+    """Regression (NFR3): with strata, each stratum's draw has that stratum's screen count and reads only its
+    own rows, so changing the test rows (their flags, their number) leaves the train selection unchanged."""
+    ev, works, curv, *_ = random_stream(n=200)
+    split = np.where(curv["t"].to_numpy() < 700, "train", "test")
+    a = matched_random_escalation(curv, seed=0, strata=split)
+    esc = curv["escalated"].to_numpy()
+    for g in ("train", "test"):
+        ids_g = set(curv.loc[split == g, "event_id"])
+        assert len(set(a) & ids_g) == int(esc[split == g].sum())
+    changed = curv.copy()
+    test_rows = np.flatnonzero(split == "test")
+    changed.loc[test_rows, "escalated"] = ~changed.loc[test_rows, "escalated"].to_numpy()  # other test count
+    b = matched_random_escalation(changed, seed=0, strata=split)
+    train_ids = set(curv.loc[split == "train", "event_id"])
+    assert set(a) & train_ids == set(b) & train_ids
+    assert set(a) - train_ids != set(b) - train_ids
+    np.testing.assert_array_equal(a, matched_random_escalation(curv, seed=0, strata=split))
+
+
 # ---------------------------------------------------------------- agreement + brute force
 
 

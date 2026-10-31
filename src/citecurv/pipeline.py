@@ -8,8 +8,9 @@
    percentile thresholds fitted on TRAIN rows and frozen, applied to every row; then directed ORC on the
    escalated rows (``curvature.orc.escalate``; ``orc_fn`` is injectable so tests run without
    GraphRicciCurvature). ``forman_only`` stops after the screen (no escalation). ``ollivier_only`` replaces
-   the screen's escalation set by ``components.matched_random_escalation`` (same size, seeded), so no Forman
-   value chooses which events get ORC.
+   the screen's escalation set by ``components.matched_random_escalation`` (same size, seeded, drawn inside
+   each split with that split's screen count, so test-period events cannot change which train rows get
+   ORC), so no Forman value chooses which events get ORC.
 3. Components (``scoring.components.score_events``), variant semantics in docs/score_components.md section 8.
 4. ``ZStats`` fitted on train rows that are not cold-start, frozen, applied to every row.
 5. Weights. ``calibrate_weights`` on VAL rows when labels are given and val holds a positive that is not
@@ -310,7 +311,7 @@ def curvature_stage(events, split, rcfg, *, seed=0, orc_fn=None, store=None, orc
     if mode == "screen":
         curv["escalated"] = False
     elif mode == "random+orc":
-        ids = matched_random_escalation(curv, seed=seed)
+        ids = matched_random_escalation(curv, seed=seed, strata=split)  # per split: no test -> train path
         curv["escalated"] = curv["event_id"].isin(ids).to_numpy()
     esc = np.flatnonzero(curv["escalated"].to_numpy())
     stats["n_selected"] = int(len(esc))

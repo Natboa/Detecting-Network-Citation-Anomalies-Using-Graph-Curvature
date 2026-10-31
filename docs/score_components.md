@@ -267,8 +267,10 @@ memory updates.
 | `no_temporal` | on (from the ablated encoder) | as `full` | on (D11) | as `full` | DyGLib memory / time encoding off |
 
 `ollivier_only`: the screen is replaced by a uniform random sample of events of the same size as the screen's
-escalated set (global rate, seeded), so the cell spends the same ORC budget while no Forman signal chooses the
-events. Most events then have no kappa, so s_geom and s_curvdyn are NaN for them and contribute nothing; that is
+escalated set (seeded), so the cell spends the same ORC budget while no Forman signal chooses the
+events. The pipeline draws the sample inside each split (train, val, test) with that split's screen count, so
+the number of test-period flags cannot change which training rows get an ORC value (NFR3; a single global
+draw did, which moved the train-fitted ZStats when test timestamps were shuffled). Most events then have no kappa, so s_geom and s_curvdyn are NaN for them and contribute nothing; that is
 the fair reading of "Ollivier only at the same budget". A test checks that changing every Forman value leaves this
 cell's output unchanged. Disabled components are all-NaN and listed in `attrs["disabled_components"]`.
 

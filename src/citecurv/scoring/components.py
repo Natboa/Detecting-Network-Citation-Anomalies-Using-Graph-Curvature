@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import math
 import warnings
+import zlib
 from dataclasses import dataclass, field as dc_field
 
 import numpy as np
@@ -714,16 +715,35 @@ def fit_curvdyn_model(events, curvature, *, train_mask, embeddings=None, tgn_emb
                         max_fit_rows, seed)
 
 
-def matched_random_escalation(curvature, *, seed=0) -> np.ndarray:
+def matched_random_escalation(curvature, *, seed=0, strata=None) -> np.ndarray:
     """Event ids to escalate in the ollivier_only cell: a uniform random sample
     (seeded) of the same size as the screen's escalated set, so the cell spends
     the same ORC budget without any Forman signal choosing the events. The
     curvature stage computes ORC for these ids; score_events(variant=
-    "ollivier_only") then reads only ORC."""
+    "ollivier_only") then reads only ORC.
+
+    strata: optional labels aligned with the curvature rows (the pipeline passes
+    the train/val/test split). The sample is then drawn inside each stratum, of
+    the size of the screen's escalated set in that stratum, from a generator
+    seeded by (seed, crc32(label)). Leak: without strata one global draw mixes
+    all rows, so the number of test-period screen flags changes which TRAIN rows
+    get an ORC value, and with it the train-fitted ZStats and s_curvdyn
+    regressor. With strata the draw for a stratum reads only that stratum's
+    rows, so test-period events cannot move any pre-cutoff selection."""
     ids = curvature["event_id"].to_numpy(dtype=np.int64)
-    n_esc = int(curvature["escalated"].fillna(False).astype(bool).sum())
-    rng = np.random.default_rng(seed)
-    return np.sort(rng.choice(ids, size=n_esc, replace=False))
+    flagged = curvature["escalated"].fillna(False).astype(bool).to_numpy()
+    if strata is None:
+        rng = np.random.default_rng(seed)
+        return np.sort(rng.choice(ids, size=int(flagged.sum()), replace=False))
+    lab = np.asarray(strata).astype(str)
+    if lab.shape != (len(ids),):
+        raise ValueError("strata must be aligned with the curvature rows")
+    picked = []
+    for g in np.unique(lab):
+        rows = lab == g
+        rng = np.random.default_rng([int(seed), zlib.crc32(g.encode("utf-8"))])
+        picked.append(rng.choice(ids[rows], size=int(flagged[rows].sum()), replace=False))
+    return np.sort(np.concatenate(picked)) if picked else np.zeros(0, dtype=np.int64)
 
 
 # ----------------------------------------------------------------- single-event path

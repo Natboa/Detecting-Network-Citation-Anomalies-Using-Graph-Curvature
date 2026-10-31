@@ -176,6 +176,29 @@ def test_every_variant_runs(fx, variant):
         assert any("learned head not fitted" in n for n in res.metrics["notes"])
 
 
+@pytest.mark.parametrize("shuffle_seed", [0, 1, 3])
+def test_ollivier_only_fitted_objects_ignore_test_period(fx, shuffle_seed):
+    """Regression (NFR3): the matched random escalation of ollivier_only must not let test-period events choose
+    which pre-cutoff rows get ORC. Shuffling test timestamps changes the number of test-period screen flags;
+    the pre-cutoff escalated set, thresholds, ZStats and weights must stay identical."""
+    cut = fx["meta"]["t_min"] - 1
+    a = run(fx, variant="ollivier_only")
+    ev = shuffle_test_timestamps(fx["events"], cut, seed=shuffle_seed)
+    b = run_pipeline(ev, fx["works"], embeddings=fx["embeddings"], event_labels=fx["event_labels"], cutoff=cut,
+                     variant="ollivier_only", seed=0, cfg=cfg_small(), orc_fn=FakeORC())
+    for r in (a, b):
+        assert int(r.curvature["escalated"].sum()) == r.metrics["curvature"]["n_screen_flagged"]
+
+    def pre_escalated(r):
+        pre = (r.split != "test").to_numpy() & r.curvature["escalated"].to_numpy()
+        return set(r.curvature.loc[pre, "event_id"])
+
+    assert pre_escalated(a) == pre_escalated(b)
+    assert a.thresholds == b.thresholds
+    assert a.zstats.to_dict() == b.zstats.to_dict()
+    assert a.weights == b.weights
+
+
 def test_no_temporal_flag_keeps_s_temp_when_off(fx):
     on = run(fx, variant="no_temporal")
     off = run(fx, variant="no_temporal", cfg=cfg_small(no_temporal_drop_s_temp=False))
