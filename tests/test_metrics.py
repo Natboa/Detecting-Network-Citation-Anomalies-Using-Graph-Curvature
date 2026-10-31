@@ -20,8 +20,6 @@ import pytest
 
 from citecurv.eval.metrics import evaluate, ranking_metrics, seed_summary
 
-sklearn_metrics = pytest.importorskip("sklearn.metrics")
-
 
 def test_keys_are_the_contract_keys():
     m = ranking_metrics([0.3, 0.2, 0.1], [1, 0, 0], ks=(100, 1000))
@@ -62,6 +60,7 @@ def test_all_tied_scores_give_chance_auroc():
 
 @pytest.mark.parametrize("seed", range(25))
 def test_cross_check_against_sklearn(seed):
+    sklearn_metrics = pytest.importorskip("sklearn.metrics")
     rng = np.random.default_rng(seed)
     n = int(rng.integers(2, 400))
     labels = (rng.random(n) < rng.uniform(0.05, 0.6)).astype(int)
