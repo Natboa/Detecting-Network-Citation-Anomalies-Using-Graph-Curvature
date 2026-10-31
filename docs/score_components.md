@@ -345,3 +345,58 @@ enter the book.
   Language Processing*. Association for Computational Linguistics.
 - Yu, L., Sun, L., Du, B., & Lv, W. (2023). Towards better dynamic graph learning: New architecture and unified
   library. In *Advances in Neural Information Processing Systems 36*.
+
+## Update 2026-10-31: findings from the curvature formulation study
+
+This section is appended; the text above is unchanged. It records what `docs/curvature_formulation_study.md`
+(synthetic data only) implies for s_geom and s_curvdyn. No decision is taken here.
+
+**Premise.** At event time the citing paper u is usually uncited: a paper published at t can be cited only by
+papers published later, so in_deg_t(u) = 0. This holds for every event of the synthetic stream. On real data it
+fails for same-day citations, preprint or online-first dates and date errors; the share of such events has not
+been measured yet (first S4.0 measurement under every option below).
+
+**Reductions** (study, section 2; refs(v) = the references of v present in the event table, so 0 for a cited
+paper outside the slice):
+
+- Forman screen (Proposition 1): F(e) = 2 - in_deg_t(u) - out_deg_t(v) = 2 - |refs(v)|. Section 4 above already
+  expected F to be close to 2 - out_deg_t(v); under the premise the identity is exact. The study asserts it on
+  every event and reports Spearman -1.000 between F and |refs(v)|.
+- Directed Ollivier-Ricci curvature as planned (Proposition 2): kappa(u, v) = -(1 - alpha)(1 - s / k), where v
+  cites k > 0 papers of which u also cites s, and kappa = 0 when k = 0. With coupling share = s / k (share = 1
+  when k = 0), kappa = -(1 - alpha)(1 - coupling share): a strictly increasing function of the share of v's
+  references that u also cites (bibliographic coupling; Kessler, 1963). GraphRicciCurvature 0.6.1 at radius 1
+  and 2 agrees with this closed form to 2e-15 on every checked event; `citecurv.curvature.variants.
+  orc_directed_uncited` computes it.
+
+**What this means for the components as defined above.**
+
+- s_geom (section 4, D5). For a non-escalated event, |z_F| measures how unusual the cited paper's in-slice
+  reference count is compared with earlier citations of the same (field, year) cell. For an escalated event,
+  |z_O| measures how unusual the coupling share of u and v is compared with earlier escalated events. Both are
+  reference-list statistics; neither uses the citation structure around u.
+- s_curvdyn (section 6, D7). The target asinh(F) equals asinh(2 - |refs(v)|), so the component scores how badly
+  the endpoint representations predict the cited paper's reference count ("reference-count surprise" rather
+  than curvature dynamics). In the `ollivier_only` cell the target is a function of the coupling share.
+- s_embed and s_temp do not depend on curvature and are unaffected.
+- In the study, adding the two plan signals to the trivial controls (cited-paper age, citation counts) changed
+  logistic-regression AP by at most 0.003 in every synthetic setting.
+
+**Open decisions for Maor** (options from the study's section 6, all PROVISIONAL; none is adopted here):
+
+1. Option A (the study's recommendation): state Propositions 1 to 3 in the book; compute the planned ORC by its
+   closed form and call the library only for events whose citing paper is already cited at t; add the trivial
+   controls (age, citation counts, coupling share, the "u cites a paper that already cites v" count) as a named
+   baseline in the ablation; describe s_geom and s_curvdyn by what they measure (the reductions above).
+2. Option B: change the formulation to a triangle-sensitive variant (reversed ORC, undirected ORC or augmented
+   Forman) and test it against the full control set on real data. In the study these added at most 0.008 AP
+   once the counts they rest on were controls.
+3. Option C: reframe the task as a retrospective audit (curvature at t + delta). This changes NFR3 and the
+   evaluation design; the study does not recommend it on its evidence.
+4. Option D: keep the plan unchanged and test on the real slice first (measure the share of events whose citing
+   paper is cited at t, and rerun the study's harness with the weak labels).
+5. Under any option: whether D5 (how Forman and ORC combine in s_geom) and D7 (the s_curvdyn target) keep their
+   current definitions, and how the book names the two components.
+
+Reference for this update: Kessler, M. M. (1963). Bibliographic coupling between scientific papers. *American
+Documentation, 14*(1), 10-25.
