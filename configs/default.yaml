@@ -129,3 +129,10 @@ baselines:                       # S4.4 (citecurv.eval.baselines)
     lr: 0.01
     K: 7
     manifold_config: H32S32E32
+
+viz:                             # interactive results explorer (citecurv.viz.build_explorer)
+  top_n: 500                     # events with a precomputed detail view
+  radius: 1                      # graph context hops (1 or 2)
+  max_nodes: 40                  # node cap for the drawn subgraph
+  flag_share: 0.01               # share of ranked events counted as flags (D4, rollup threshold)
+  n_rollup: 200                  # papers/authors kept in the rollup view

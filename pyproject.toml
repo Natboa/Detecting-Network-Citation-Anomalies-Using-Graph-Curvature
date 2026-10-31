@@ -30,5 +30,8 @@ tgn = ["torch>=2", "tqdm", "scikit-learn", "pyyaml"]
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+citecurv = ["viz/assets/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

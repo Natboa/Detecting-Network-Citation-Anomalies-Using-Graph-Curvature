@@ -31,6 +31,10 @@ MODULES = [
     "citecurv.eval.baselines.tier1_stats",
     "citecurv.eval.baselines.tier2_xgb",
     "citecurv.eval.baselines.pygod_tier",
+    "citecurv.viz",
+    "citecurv.viz.explorer",
+    "citecurv.viz.precompute",
+    "citecurv.viz.graphctx",
 ]
 
 
