@@ -17,6 +17,7 @@ MODULES = [
     "citecurv.curvature.forman_directed",
     "citecurv.curvature.orc",
     "citecurv.curvature.screen",
+    "citecurv.curvature.variants",
     "citecurv.curvature.timeslice",
     "citecurv.tgn.convert",
     "citecurv.tgn.train",
