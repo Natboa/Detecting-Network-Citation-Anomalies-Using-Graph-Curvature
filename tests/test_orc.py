@@ -325,3 +325,20 @@ def test_real_orc_radius2_subgraph_equals_full_snapshot(prune):
         G.add_edge(r.src_id, r.dst_id)
         full = orc_directed(G, [(r.src_id, r.dst_id)], method="OTD")[(r.src_id, r.dst_id)]
         assert r.orc == pytest.approx(full, abs=1e-9), r.event_id
+
+
+def test_real_orc_reduces_to_reference_overlap_when_source_is_uncited():
+    """If u has no predecessors at t, m_u is a Dirac at u and d(u, w) is 1 when u also cites w, else 2
+    (via v), so kappa(u, v) = -(1 - alpha) * (1 - |succ(u) & succ(v)| / |succ(v)|), and 0 if succ(v) is empty."""
+    pytest.importorskip("GraphRicciCurvature")
+    ev = make_events([
+        (1, "v", "w1", 1), (2, "v", "w2", 1), (3, "v", "w3", 1), (4, "v", "w4", 1),
+        (5, "u", "v", 2), (6, "u", "w1", 2), (7, "u", "w2", 2), (8, "u", "z", 2),
+        (9, "u", "w4", 2),
+    ])
+    curv = flagged(forman_screen(ev), [5, 9])
+    for alpha in (0.5, 0.3):
+        out, _ = escalate(ev, curv, EventStore(ev), radius=1, method="OTD", alpha=alpha)
+        orc = dict(zip(out["event_id"], out["orc"]))
+        assert orc[5] == pytest.approx(-(1 - alpha) * (1 - 3 / 4), abs=1e-9)  # u also cites w1, w2, w4
+        assert orc[9] == pytest.approx(0.0, abs=1e-9)  # w4 cites nothing

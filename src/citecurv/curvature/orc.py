@@ -27,6 +27,13 @@ change kappa(u, v). edge_tiers() ranks edges by this rule; it is also why a
 radius-2 subgraph reproduces ORC on the whole time-t graph exactly while radius
 1 can miss length-2 paths through second-hop nodes (checked against the real
 library in tests/test_orc.py and scripts/run_orc_validation.py).
+
+Consequence for citation events: a citing paper u is almost never cited by
+time t = its own publication date, so m_u is a Dirac at u, d(u, w) = 1 when u
+also cites w and 2 otherwise (via v), and
+    kappa(u, v) = -(1 - alpha) * (1 - |succ(u) & succ(v)| / |succ(v)|)
+(0 when v cites nothing): minus (1 - alpha) times the share of v's references
+that u does not also cite. Radius 1 is then already exact.
 """
 
 import time
