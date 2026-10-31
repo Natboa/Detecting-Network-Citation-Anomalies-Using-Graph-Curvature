@@ -1,0 +1,5 @@
+group,level,seeds,AP full,AP shuffled,AUROC full,AUROC shuffled,P@100 full,P@100 shuffled,chance AP (prevalence),chance AUROC
+matrix,blatant,0,0.024,0.022,0.397,0.378,0.000,0.000,0.0301,0.500
+matrix,moderate,0,0.003,0.004,0.408,0.489,0.000,0.000,0.0044,0.500
+matrix,subtle,0,0.000,0.001,0.411,0.455,0.000,0.000,0.0007,0.500
+matrix,clique,0,0.170,0.184,0.869,0.871,0.190,0.250,0.0313,0.500

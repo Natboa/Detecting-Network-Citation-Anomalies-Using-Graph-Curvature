@@ -1,0 +1,25 @@
+group,level,metric,full,no_curvature,delta (full - no_curv),per-seed deltas,n_seeds,chance level,verdict
+matrix,blatant,AP,0.025 ± 0.004,0.022 ± 0.001,0.002 ± 0.004,"s0: +0.0000, s1: -0.0005, s2: +0.0073",3,0.0264,within seed noise
+matrix,blatant,AUROC,0.455 ± 0.087,0.430 ± 0.041,0.026 ± 0.047,"s0: +0.0000, s1: -0.0027, s2: +0.0793",3,0.500,within seed noise
+matrix,blatant,P@100,0.000 ± 0.000,0.000 ± 0.000,0.000 ± 0.000,"s0: +0.0000, s1: +0.0000, s2: +0.0000",3,0.0264,within seed noise
+matrix,moderate,AP,0.003 ± 0.000,0.002 ± 0.000,0.000 ± 0.000,"s0: +0.0005, s1: +0.0006, s2: +0.0000",3,0.0029,outside seed noise
+matrix,moderate,AUROC,0.419 ± 0.022,0.411 ± 0.072,0.008 ± 0.066,"s0: +0.0804, s1: -0.0485, s2: -0.0094",3,0.500,within seed noise
+matrix,moderate,P@100,0.000 ± 0.000,0.000 ± 0.000,0.000 ± 0.000,"s0: +0.0000, s1: +0.0000, s2: +0.0000",3,0.0029,within seed noise
+matrix,subtle,AP,0.000 ± 0.000,0.000 ± 0.000,0.000 ± 0.000,"s0: +0.0000, s1: +0.0000, s2: +0.0001",3,0.0003,within seed noise
+matrix,subtle,AUROC,0.534 ± 0.127,0.486 ± 0.065,0.048 ± 0.084,"s0: +0.0000, s1: +0.0000, s2: +0.1447",3,0.500,within seed noise
+matrix,subtle,P@100,0.000 ± 0.000,0.000 ± 0.000,0.000 ± 0.000,"s0: +0.0000, s1: +0.0000, s2: +0.0000",3,0.0003,within seed noise
+matrix,clique,AP,0.155 ± 0.020,0.154 ± 0.018,0.000 ± 0.003,"s0: +0.0000, s1: -0.0026, s2: +0.0040",3,0.0306,within seed noise
+matrix,clique,AUROC,0.858 ± 0.014,0.861 ± 0.010,-0.003 ± 0.004,"s0: +0.0000, s1: -0.0074, s2: -0.0025",3,0.500,within seed noise
+matrix,clique,P@100,0.187 ± 0.015,0.173 ± 0.021,0.013 ± 0.012,"s0: +0.0000, s1: +0.0200, s2: +0.0200",3,0.0306,within seed noise
+equal_weights,blatant,AP,0.022 ± 0.002,0.021 ± 0.002,0.001 ± 0.001,"s0: +0.0020, s1: +0.0002, s2: +0.0021",3,0.0264,within seed noise
+equal_weights,blatant,AUROC,0.427 ± 0.019,0.415 ± 0.008,0.013 ± 0.022,"s0: -0.0018, s1: +0.0026, s2: +0.0375",3,0.500,within seed noise
+equal_weights,blatant,P@100,0.027 ± 0.046,0.000 ± 0.000,0.027 ± 0.046,"s0: +0.0800, s1: +0.0000, s2: +0.0000",3,0.0264,within seed noise
+equal_weights,moderate,AP,0.002 ± 0.001,0.002 ± 0.001,0.000 ± 0.000,"s0: +0.0000, s1: +0.0002, s2: +0.0001",3,0.0029,within seed noise
+equal_weights,moderate,AUROC,0.318 ± 0.017,0.289 ± 0.060,0.029 ± 0.045,"s0: -0.0112, s1: +0.0774, s2: +0.0215",3,0.500,within seed noise
+equal_weights,moderate,P@100,0.000 ± 0.000,0.000 ± 0.000,0.000 ± 0.000,"s0: +0.0000, s1: +0.0000, s2: +0.0000",3,0.0029,within seed noise
+equal_weights,subtle,AP,0.000 ± 0.000,0.000 ± 0.000,0.000 ± 0.000,"s0: -0.0000, s1: +0.0003, s2: +0.0001",3,0.0003,within seed noise
+equal_weights,subtle,AUROC,0.387 ± 0.084,0.337 ± 0.052,0.050 ± 0.083,"s0: -0.0187, s1: +0.0261, s2: +0.1412",3,0.500,within seed noise
+equal_weights,subtle,P@100,0.000 ± 0.000,0.000 ± 0.000,0.000 ± 0.000,"s0: +0.0000, s1: +0.0000, s2: +0.0000",3,0.0003,within seed noise
+equal_weights,clique,AP,0.049 ± 0.004,0.058 ± 0.007,-0.009 ± 0.009,"s0: -0.0187, s1: -0.0077, s2: -0.0003",3,0.0306,outside seed noise
+equal_weights,clique,AUROC,0.651 ± 0.006,0.683 ± 0.022,-0.032 ± 0.023,"s0: -0.0576, s1: -0.0249, s2: -0.0142",3,0.500,outside seed noise
+equal_weights,clique,P@100,0.037 ± 0.038,0.027 ± 0.012,0.010 ± 0.046,"s0: -0.0300, s1: +0.0000, s2: +0.0600",3,0.0306,within seed noise

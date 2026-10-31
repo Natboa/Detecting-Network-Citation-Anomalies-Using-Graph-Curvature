@@ -1,0 +1,9 @@
+group,level,cell,AP fixed (full),AP learned,ΔAP learned - fixed,AUROC fixed (full),AUROC learned,ΔAUROC learned - fixed
+matrix,blatant,full_learned,0.025 ± 0.004,0.032 ± 0.005,0.007 ± 0.001,0.455 ± 0.087,0.560 ± 0.044,0.104 ± 0.048
+matrix,blatant,full_learned_train,0.025 ± 0.004,0.024 ± 0.002,-0.001 ± 0.003,0.455 ± 0.087,0.459 ± 0.029,0.004 ± 0.071
+matrix,moderate,full_learned,0.003 ± 0.000,0.008 ± 0.004,0.005 ± 0.004,0.419 ± 0.022,0.666 ± 0.089,0.248 ± 0.093
+matrix,moderate,full_learned_train,0.003 ± 0.000,0.004 ± 0.001,0.001 ± 0.001,0.419 ± 0.022,0.594 ± 0.057,0.175 ± 0.044
+matrix,subtle,full_learned,0.000 ± 0.000,0.002 ± 0.002,0.001 ± 0.002,0.534 ± 0.127,0.588 ± 0.059,0.054 ± 0.162
+matrix,subtle,full_learned_train,0.000 ± 0.000,0.001 ± 0.000,0.000 ± 0.001,0.534 ± 0.127,0.499 ± 0.222,-0.034 ± 0.330
+matrix,clique,full_learned,0.155 ± 0.020,0.207 ± 0.029,0.052 ± 0.019,0.858 ± 0.014,0.880 ± 0.008,0.022 ± 0.010
+matrix,clique,full_learned_train,0.155 ± 0.020,0.127 ± 0.016,-0.028 ± 0.004,0.858 ± 0.014,0.839 ± 0.017,-0.018 ± 0.004

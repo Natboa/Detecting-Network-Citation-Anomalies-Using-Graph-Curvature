@@ -1,0 +1,4 @@
+group,level,method,kind,n_seeds,n_pos,AUROC,AP,P@100,R@1000
+repro,moderate,full,model,1,83.0,0.408,0.003,0.000,0.024
+tgn_extra,moderate,full_static,model,1,41.0,0.557,0.005,0.000,0.024
+tgn_extra,moderate,full_tgn,model,1,41.0,0.671,0.007,0.000,0.073
