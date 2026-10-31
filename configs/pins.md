@@ -6,9 +6,9 @@ never `pip install` unpinned in a notebook.
 | Stage env | Pins |
 |-----------|------|
 | data | python 3.12 · pyalex 0.21 · pandas · pyarrow · requests |
-| embed | adapters 1.3.0 (pins transformers ~4.57.x) · torch 2.x CUDA |
+| embed | adapters 1.3.0 · transformers ==4.57.6 exactly (Colab ships 5.x; 2026-10 refresh) · torch 2.x CUDA · fallback SciNCL on plain transformers |
 | curv | GraphRicciCurvature 0.5.3.2 · POT 0.9.6 · networkit 11.2.1 · scipy ≤1.13.1 · networkx |
-| tgn | vendored DyGLib · torch 2.x CUDA (pure PyTorch — no PyG) |
+| tgn | vendored DyGLib @3aacc36 + third_party/DyGLib/PATCHES.md · torch 2.x CUDA (pure PyTorch — no PyG); CPU smoke passed on torch 2.15 |
 | baseline | pygod 1.1.0 · torch_geometric 2.5–2.6 · torch 2.x · xgboost (3.3+ on py3.12) · scikit-learn 1.9 |
 | curvgad (sealed) | whatever karish-grover/curvgad requirements.txt says, in its own env, never merged |
 

@@ -1,12 +1,33 @@
 seed_list: [0, 1, 2, 3, 4]
 
 data:
-  page_size: 100          # design for 100 per docs; live accepts 200 today
-  mailto: null            # set at S0.4 together with the API key registration email
+  page_size: 100          # per_page=200 is deprecated by OpenAlex (2026-10 refresh); keep 100
+  mailto: null            # OpenAlex now ignores mailto (2026-10 refresh); kept for the polite-pool header only
   max_retries: 5
   backoff_base_s: 2.0
 
+labels:
+  natures: [Retraction]   # which RWDB notice types count as positives — PROVISIONAL(G3), Maor decides (slice_shortlist.md)
+
 slice: {}                 # filled by S1.3 -> configs/slice.yaml
+
+slice_selection:          # S1.3, citecurv.data.slice_query
+  works_target: 300000    # L11 size target
+  works_tol: 0.5          # accept 150K-450K works
+  min_edges: 2000000      # S1.3 edge floor
+  min_labeled: 300        # labeled papers in slice
+  min_labeled_test: 100   # labeled papers in the test window
+  max_cost_usd: 0.5       # pull budget
+  daily_cap: 1000000      # results per day
+  doi_batch_size: 50      # DOIs per OR call (documented max 100)
+  sample_n: 100           # refs-per-work sample, one page
+
+embed:                    # S1.6, citecurv.embed.specter2
+  model: allenai/specter2_base
+  adapter: allenai/specter2       # proximity adapter (naming trap: this is the adapter, not the base)
+  batch_size: 32
+  max_length: 512
+  chunk_size: 20000               # resumable chunks on Drive
 
 curvature:
   screen_percentile_low: null    # set in S2.3
@@ -21,15 +42,60 @@ curvature:
 tgn:
   node_feat_dim: 768
   memory_projection_dim: null    # fallback knob if 768-dim memory is too heavy
+  epochs: 50                     # DyGLib --num_epochs; early stopping on validation
+  patience: 20                   # early-stopping patience
+  batch_size: 200                # DyGLib default
+  num_neighbors: 10              # DyGLib best TGN config
+  num_layers: 1                  # DyGLib best TGN config
+  num_heads: 2
+  dropout: 0.1
+  time_feat_dim: 100
+  sample_neighbor_strategy: recent
+  learning_rate: 1.0e-4          # DyGLib default
+  direction_aware: true          # vendored patch P5 (keeps citation direction) — Maor reviews
+  leak_check: false              # memory leak hook; turn on for the S1.7 pilot
+  infer:
+    batch_size: 200
+    align_to_timestamps: true    # batches cut between days -> memory holds only ts < t
+    max_batch_size: 2000
+    embeddings_dtype: float32    # float16 halves the 2*M*d endpoint-embedding file
 
 scoring:
-  cold_start_k: 3                # provisional (L19), finalized in S2.4
-  weights:                       # calibrated per-run in S3.2; these are inert defaults
-    s_embed: 1.0
-    s_geom: 1.0
-    s_temp: 1.0
-    s_curvdyn: 1.0
+  cold_start_k: 3                # provisional (L19), finalized in S2.4; D8 off-by-one in score_components.md
+  weights:                       # on the simplex (sum 1); calibrated per run in S3.2 — these are inert defaults
+    s_embed: 0.25
+    s_geom: 0.25
+    s_temp: 0.25
+    s_curvdyn: 0.25
+  zstats: {robust: false, std_floor: 1.0e-6, exclude_cold_start: true}   # train-only normalisation
+  calibration: {step: 0.1, metric: ap}       # simplex lattice step (286 points); objective on val rows
+  learned_combiner: {C: 1.0, class_weight: balanced, random_state: 0, max_iter: 1000}  # L13 extra cell only
+  rollup: {role: cited, top_n: 5, threshold: null, author_top_n: 5}      # FR8 paper/author aggregates
+  components:                    # docs/score_components.md — PROVISIONAL (S3.1 gate)
+    embed_mode: auto             # auto | tgn | static_cosine (rehearsal before the TGN is wired)
+    window_days: 90              # s_temp trailing window W (days); provisional
+    min_cell: 30                 # earlier values a reference cell needs before use
+    curvdyn_pca_dim: 32          # PCA dims per endpoint vector for s_curvdyn
+    curvdyn_ridge_alpha: 1.0     # ridge penalty on standardised features
+    curvdyn_max_fit_rows: 500000 # seeded cap on train rows for the s_curvdyn fit
+    p_link_eps: 1.0e-7           # clip p_link before -ln
 
 eval:
   cutoff_date: null              # set in S4.1
   top_k: [100, 1000]
+  split: {min_test_pos: 100, min_test_share: 0.15, positive_unit: paper, val_frac: 0.10}  # S4.1
+
+synthetic:                       # stand-in stream before S4.0 (citecurv.data.synthetic)
+  n_works: 20000
+  n_fields: 8
+  years: [2005, 2025]
+  refs_mean: 25
+  emb_dim: 64
+  knobs: {}                      # overrides of DEFAULT_KNOBS (growth_rate, cross_field_rate, ...)
+
+inject:                          # S4.5 (citecurv.eval.inject)
+  n_cartels: 10
+  recipient_share: 0.4
+  t_min: null                    # cutoff in days; every injected event has t >= t_min
+  levels: [blatant, moderate, subtle]
+  clique: {n_cliques: 10, clique_size: 15, drop_prob: 0.0}

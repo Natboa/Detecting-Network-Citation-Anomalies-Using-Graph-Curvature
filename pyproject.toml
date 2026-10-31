@@ -20,7 +20,12 @@ dev = [
     "networkx",
     "pyyaml",
     "pyalex==0.21",
+    "scikit-learn",
+    "scipy",
+    "xgboost",
+    "nbformat",
 ]
+tgn = ["torch>=2", "tqdm", "scikit-learn", "pyyaml"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
