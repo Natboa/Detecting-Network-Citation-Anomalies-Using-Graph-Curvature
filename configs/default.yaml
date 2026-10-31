@@ -5,6 +5,10 @@ data:
   mailto: null            # OpenAlex now ignores mailto (2026-10 refresh); kept for the polite-pool header only
   max_retries: 5
   backoff_base_s: 2.0
+  api_key_mode: bearer      # bearer (Authorization header) | param (api_key query param); env OPENALEX_KEY_MODE overrides — verify with check_key() at S0.4
+  max_requests_per_s: 10    # client throttle; a free key allows 30/s; null = off
+  timeout_s: 60             # per-request HTTP timeout, seconds
+  pages_per_part: 1         # resumable pulls: pages per committed part (state written after each)
 
 labels:
   natures: [Retraction]   # which RWDB notice types count as positives — PROVISIONAL(G3), Maor decides (slice_shortlist.md)
