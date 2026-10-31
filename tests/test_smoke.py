@@ -13,6 +13,7 @@ MODULES = [
     "citecurv.data.rwdb",
     "citecurv.data.slice_query",
     "citecurv.data.synthetic",
+    "citecurv.data.events",
     "citecurv.embed.specter2",
     "citecurv.curvature.forman_directed",
     "citecurv.curvature.orc",

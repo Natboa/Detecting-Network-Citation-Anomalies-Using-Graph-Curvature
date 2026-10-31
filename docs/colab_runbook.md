@@ -26,10 +26,10 @@ S1.1-live (the first real pull) and S1.2 run from `10_data` or locally; see the 
 section 9. The directed ORC values of S1.5 come from Block A of `00_smoke` and from
 `scripts/run_orc_validation.py` (results in `results/orc_validation_*.json`).
 
-Two connections between the notebooks are not in place yet (section 10): no notebook writes
-`events.parquet` (the event table with `event_id` that `30` and `40` read), and `10_data` writes under
-`pilot/` and `full/` while `20`, `30` and `40` read from the Drive root. Do not improvise event ids by
-hand: every artifact is joined on `event_id`, so it must be defined once, in code.
+`10_data` writes `events.parquet` (the event table with `event_id` that `30`, `40` and `50` read)
+through `citecurv.data.events.build_events`, and every notebook reads and writes the same
+`RUN_DIR` (section 5). Do not improvise event ids by hand: every artifact is joined on `event_id`,
+which is defined once, in code (sorted by t, src_id, dst_id).
 
 ## 2. Runtime type and Python version
 
@@ -46,7 +46,8 @@ At the start of every session:
    High-RAM if the plan allows it.
 4. Save, then Runtime > Run all.
 
-The first code cell of `00_smoke` and `30_curvature` stops with a message when Python is not 3.12.
+The first code cell of `00_smoke`, `20_embed`, `30_curvature` and `40_tgn` checks the Python version
+(`00`, `20` and `30` stop with a message when it is not 3.12).
 Both have an opt-in flag for Python 3.13 (`ALLOW_PY313` in `00`, `ALLOW_PY313_NODEPS` in `30`): it
 installs GraphRicciCurvature with `--no-deps` next to the runtime's SciPy. That path gave values
 identical to Python 3.12 in a Linux container, not on Colab. PROVISIONAL: Maor decides whether it
@@ -158,9 +159,8 @@ for checkpoint-resume on anything longer than 30 minutes. What survives, per sta
 `edges.parquet` exists is skipped on rerun. Inside a year, `pull_works(..., state_path=...)` writes
 the cursor and counts to a JSON state file after every page (atomically) and the page rows to part
 files, so a rerun with the same filters and state file resumes at the saved cursor; parts missing on
-Drive are fetched again. `10_data` does not pass `state_path` yet (section 10); until it does, a dead
-session repeats the current year, which costs at most that year's pages (about $0.0001 per page of
-100 works).
+Drive are fetched again. `10_data` passes one state file per year
+(`RUN_DIR/year=Y/pull_state.json`) and, on `BudgetExhausted`, prints the resume instructions and stops.
 
 Daily budget: a free key has $1 a day, reset at midnight UTC, which is about 10,000 list pages or
 1,000,000 works at 100 per page (OpenAlex, 2026c). A 300,000-work slice is about 3,000 pages. If the
@@ -192,7 +192,7 @@ during training loses that training run. What to do:
 3. If the session dies during training, rerun the same seed from the start. The seed fixes the run,
    so the result is reproducible within tolerance on the same hardware.
 4. If it dies after training but before inference: in a new session run cells 1 to 4 (conversion
-   is deterministic), copy `DRIVE_RUN` back to `RUN_DIR` (`shutil.copytree`), then run cells 6 and 7.
+   is deterministic), copy `DRIVE_RUN` back to `LOCAL_RUN` (`shutil.copytree`), then run cells 6 and 7.
    The checkpoint paths in `metrics.json` are relative to the run folder, so a copied folder works.
 5. Write each death in the unit-burn log (section 7); repeated deaths are evidence for gate G1.
 
@@ -299,16 +299,17 @@ Row format: `<date> | 00_smoke, TAG <tag>, all four blocks, gate <PASS/FAIL> | T
 
 ## 10. Open items for the integrator (not operator tasks)
 
-- `10_data`: pass `state_path=out / "pull_state.json"` to `pull_works` and catch `BudgetExhausted`
-  (print its message and stop), so S4.0 resumes inside a year bucket.
-- A step that turns `edges.parquet` into the contract `events.parquet` (`event_id, src_id, dst_id,
-  t`) in code, and one path convention for `works.parquet` / `events.parquet` between `10_data` and
-  `20`/`30`/`40`.
-- `20_embed`: add the same first-cell Python check as `00` and `30`.
-- `30_curvature` and `configs/pins.md`: the GraphRicciCurvature version (decision L5, Maor).
-- `slice_query._default_fetch` still sends the key through pyalex (Bearer only) and retries 429s
-  without the budget check; it can switch to `citecurv.data.openalex.make_client` if the parameter
-  mode turns out to be needed.
+Closed on 2026-10-31: `10_data` passes `state_path` and catches `BudgetExhausted`; `events.parquet`
+is built in code (`citecurv.data.events`); one `RUN_DIR` layout for all notebooks; `20_embed` has the
+Python check; `slice_query` fetches through `citecurv.data.openalex` (key modes + budget check).
+
+Still open:
+- `30_curvature` and `configs/pins.md`: the GraphRicciCurvature version (decision L5, Maor;
+  recommendation 0.6.1 in `docs/orc_version_comparison.md`).
+- No code writes `split.parquet` yet; `30` reads it from `RUN_DIR` (write it from `citecurv.eval.split`
+  at S4.1, or from `50_eval`'s pilot cells).
+- `embeddings.npz` covers `works.parquet` only; cited works outside the slice get zero rows in
+  `to_jodie` and NaN in `static_cosine` mode. Decide at S1.3 whether to embed out-of-slice cited works.
 
 ## References
 
