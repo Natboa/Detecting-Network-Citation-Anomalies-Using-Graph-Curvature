@@ -1,0 +1,3 @@
+group,level,cell,AP fixed (full),AP learned,ΔAP learned - fixed,AUROC fixed (full),AUROC learned,ΔAUROC learned - fixed
+matrix,moderate,full_learned,0.023 ± 0.002,0.020 ± 0.004,-0.003 ± 0.003,0.579 ± 0.010,0.571 ± 0.034,-0.008 ± 0.045
+matrix,subtle,full_learned,0.010 ± 0.005,0.010 ± 0.003,-0.001 ± 0.003,0.580 ± 0.038,0.575 ± 0.021,-0.005 ± 0.059

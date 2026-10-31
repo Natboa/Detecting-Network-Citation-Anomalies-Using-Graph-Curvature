@@ -1,0 +1,147 @@
+{
+  "compute": {
+    "cpu_minutes": 2.5235760000000003,
+    "peak_rss_mb_children": 652.09375,
+    "peak_rss_mb_driver": 1001.73828125,
+    "wall_minutes": 2.202227505048116
+  },
+  "design": {
+    "age_matched": false,
+    "baselines": {
+      "max_ref_candidates": 20,
+      "min_venue_citers": 3,
+      "window_days": 365,
+      "xgb": {
+        "eta": 0.1,
+        "max_depth": 4,
+        "nthread": 1,
+        "num_boost_round": 300
+      }
+    },
+    "clique": {
+      "clique_size": 15,
+      "drop_prob": 0.0
+    },
+    "emb_dim": 64,
+    "embed_mode": "static_cosine",
+    "fairness_flag_share": 0.01,
+    "fairness_max_cell_share": 0.5,
+    "n_cartels": {
+      "test": 10,
+      "train": 10,
+      "val": 5
+    },
+    "n_fields": 8,
+    "n_works": 3000,
+    "orc_diagnostic_negatives": 1000,
+    "pipeline": {
+      "orc_max_events": null,
+      "orc_radius": 1,
+      "screen_percentile_high": 0.99,
+      "screen_percentile_low": 0.01,
+      "with_inputs": false
+    },
+    "pygod": {
+      "detector": "DOMINANT",
+      "epoch": 100,
+      "hid_dim": 64,
+      "level": "moderate",
+      "seed": 0
+    },
+    "recipient_share": 0.4,
+    "refs_mean": 25,
+    "temporal_stat": "poisson_tail",
+    "test_share": 0.2,
+    "tgn": {
+      "epochs": 2,
+      "learning_rate": 0.001,
+      "n_cartels": {
+        "test": 4,
+        "train": 4,
+        "val": 2
+      },
+      "n_fields": 4,
+      "n_works": 2000,
+      "num_threads": 1
+    },
+    "val_frac": 0.1,
+    "years": [
+      2005,
+      2025
+    ]
+  },
+  "diagnostics": {},
+  "gates": {},
+  "note": "SYNTHETIC DATA: synthetic citation streams with planted cartels (citecurv.data.synthetic, citecurv.eval.inject); not a measurement on real citations",
+  "realisations": {
+    "moderate": {
+      "0": {
+        "baseline_cpu_s": 2.4486989999999977,
+        "cutoff_t": 19423,
+        "dst_age_days_median": {
+          "negatives": 3471.0,
+          "positives": 416.0
+        },
+        "injected": {
+          "test": 269,
+          "train": 262,
+          "val": 112
+        },
+        "model_cpu_s": 34.912446,
+        "model_test_n_pos_scored": 81,
+        "n_events": 71817
+      },
+      "1": {
+        "baseline_cpu_s": 2.3458710000000025,
+        "cutoff_t": 19342,
+        "dst_age_days_median": {
+          "negatives": 3472.5,
+          "positives": 442.5
+        },
+        "injected": {
+          "test": 257,
+          "train": 218,
+          "val": 114
+        },
+        "model_cpu_s": 34.026829,
+        "model_test_n_pos_scored": 60,
+        "n_events": 71483
+      }
+    },
+    "subtle": {
+      "0": {
+        "baseline_cpu_s": 2.603605999999999,
+        "cutoff_t": 19423,
+        "dst_age_days_median": {
+          "negatives": 3503.0,
+          "positives": 413.5
+        },
+        "injected": {
+          "test": 65,
+          "train": 50,
+          "val": 31
+        },
+        "model_cpu_s": 37.457734,
+        "model_test_n_pos_scored": 8,
+        "n_events": 71320
+      },
+      "1": {
+        "baseline_cpu_s": 2.1773900000000026,
+        "cutoff_t": 19342,
+        "dst_age_days_median": {
+          "negatives": 3499.0,
+          "positives": 540.0
+        },
+        "injected": {
+          "test": 51,
+          "train": 48,
+          "val": 33
+        },
+        "model_cpu_s": 32.55263799999999,
+        "model_test_n_pos_scored": 7,
+        "n_events": 71026
+      }
+    }
+  },
+  "synthetic": true
+}

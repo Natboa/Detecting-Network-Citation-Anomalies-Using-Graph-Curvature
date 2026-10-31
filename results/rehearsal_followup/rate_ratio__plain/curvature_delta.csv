@@ -1,0 +1,7 @@
+group,level,metric,full,no_curvature,delta (full - no_curv),per-seed deltas,n_seeds,chance level,verdict
+matrix,moderate,AP,0.006 ± 0.002,0.005 ± 0.001,0.001 ± 0.002,"s0: +0.0025, s1: +0.0002",2,0.0055,within seed noise
+matrix,moderate,AUROC,0.422 ± 0.041,0.496 ± 0.040,-0.074 ± 0.081,"s0: -0.0170, s1: -0.1318",2,0.500,outside seed noise
+matrix,moderate,P@100,0.025 ± 0.021,0.000 ± 0.000,0.025 ± 0.021,"s0: +0.0400, s1: +0.0100",2,0.0055,outside seed noise
+matrix,subtle,AP,0.001 ± 0.000,0.001 ± 0.000,0.000 ± 0.000,"s0: +0.0000, s1: +0.0001",2,0.0006,within seed noise
+matrix,subtle,AUROC,0.558 ± 0.012,0.513 ± 0.077,0.046 ± 0.065,"s0: +0.0000, s1: +0.0916",2,0.500,within seed noise
+matrix,subtle,P@100,0.000 ± 0.000,0.000 ± 0.000,0.000 ± 0.000,"s0: +0.0000, s1: +0.0000",2,0.0006,within seed noise

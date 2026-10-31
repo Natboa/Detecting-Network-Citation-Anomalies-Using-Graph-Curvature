@@ -1,0 +1,23 @@
+group,level,method,kind,n_seeds,n_pos,n,AUROC,AP,P@100,R@1000
+matrix,moderate,full,model,2,181.5,12912.0,0.579 ± 0.010,0.023 ± 0.002,0.070 ± 0.014,0.129 ± 0.005
+matrix,moderate,full_learned,model,2,181.5,12912.0,0.571 ± 0.034,0.020 ± 0.004,0.060 ± 0.014,0.137 ± 0.007
+matrix,moderate,no_curvature,model,2,181.5,12912.0,0.582 ± 0.014,0.023 ± 0.002,0.065 ± 0.007,0.139 ± 0.009
+matrix,moderate,tier2_xgb,baseline,2,181.5,12912.0,0.793 ± 0.048,0.068 ± 0.039,0.120 ± 0.099,0.328 ± 0.159
+matrix,moderate,tier1_burst_z,baseline,2,181.5,12912.0,0.681 ± 0.012,0.041 ± 0.024,0.095 ± 0.106,0.193 ± 0.003
+matrix,moderate,tier1_venue_gini,baseline,2,181.5,12912.0,0.664 ± 0.019,0.027 ± 0.002,0.040 ± 0.042,0.183 ± 0.009
+matrix,moderate,dst_age,control,2,181.5,12912.0,0.631 ± 0.058,0.025 ± 0.003,0.050 ± 0.000,0.170 ± 0.088
+matrix,moderate,tier1_rank_average,baseline,2,181.5,12912.0,0.673 ± 0.016,0.022 ± 0.004,0.000 ± 0.000,0.100 ± 0.025
+matrix,moderate,random,control,2,181.5,12912.0,0.483 ± 0.001,0.014 ± 0.004,0.015 ± 0.021,0.055 ± 0.002
+matrix,moderate,tier1_self_citation,baseline,2,181.5,12912.0,0.469 ± 0.003,0.014 ± 0.002,0.000 ± 0.000,0.007 ± 0.010
+matrix,moderate,ref_overlap,control,2,181.5,12912.0,0.497 ± 0.035,0.013 ± 0.001,0.000 ± 0.000,0.008 ± 0.002
+matrix,subtle,full,model,2,51.0,12760.5,0.580 ± 0.038,0.010 ± 0.005,0.020 ± 0.014,0.213 ± 0.146
+matrix,subtle,full_learned,model,2,51.0,12760.5,0.575 ± 0.021,0.010 ± 0.003,0.030 ± 0.000,0.207 ± 0.116
+matrix,subtle,no_curvature,model,2,51.0,12760.5,0.590 ± 0.020,0.010 ± 0.000,0.025 ± 0.007,0.222 ± 0.017
+matrix,subtle,tier2_xgb,baseline,2,51.0,12760.5,0.719 ± 0.076,0.012 ± 0.008,0.025 ± 0.021,0.248 ± 0.091
+matrix,subtle,tier1_venue_gini,baseline,2,51.0,12760.5,0.739 ± 0.023,0.011 ± 0.005,0.020 ± 0.000,0.225 ± 0.058
+matrix,subtle,dst_age,control,2,51.0,12760.5,0.650 ± 0.069,0.009 ± 0.007,0.015 ± 0.021,0.160 ± 0.040
+matrix,subtle,tier1_burst_z,baseline,2,51.0,12760.5,0.629 ± 0.025,0.007 ± 0.003,0.005 ± 0.007,0.149 ± 0.012
+matrix,subtle,tier1_rank_average,baseline,2,51.0,12760.5,0.672 ± 0.053,0.007 ± 0.003,0.000 ± 0.000,0.100 ± 0.008
+matrix,subtle,random,control,2,51.0,12760.5,0.547 ± 0.056,0.005 ± 0.000,0.010 ± 0.014,0.097 ± 0.049
+matrix,subtle,tier1_self_citation,baseline,2,51.0,12760.5,0.469 ± 0.003,0.004 ± 0.001,0.000 ± 0.000,0.000 ± 0.000
+matrix,subtle,ref_overlap,control,2,51.0,12760.5,0.405 ± 0.018,0.003 ± 0.001,0.000 ± 0.000,0.042 ± 0.015

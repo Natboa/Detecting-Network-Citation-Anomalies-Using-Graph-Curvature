@@ -267,3 +267,57 @@ PYTHONPATH=src python -m citecurv.eval.ablation --tables results/rehearsal/run_b
 The inputs of the `full` / moderate / seed-0 run for the results explorer are in
 `data/rehearsal/explorer_inputs/` (gitignored; `manifest.json` lists each file with its contract name and the
 `scripts/build_explorer.py` command).
+
+## 11. Follow-up (2026-10-31): Poisson-tail s_temp and age-matched cartels
+
+> **SYNTHETIC DATA.** Every number in this section comes from synthetic citation streams with planted cartels.
+> None of it is a measurement on real citations.
+
+**What changed (options only; every default is unchanged).** (a) `scoring.components.temporal_stat:
+poisson_tail` replaces the D6 rate ratio by x = −ln P(N ≥ n_recent), N the Gamma-Poisson predictive count of
+the cited paper in W = 90 days given its own history (n_before citations over T_before days; prior one
+pseudo-citation per W days, `temporal_prior_count` / `temporal_prior_days`). Same counts, same leak rules and
+same-day handling as the rate ratio. (b) `inject_cartel(age_matched=True)`: donors are drawn in the cartel
+window as before, recipients are older papers of the same field chosen so that cited ages follow the field's
+natural cited-age distribution (events before the window start); edges run donor → recipient only.
+`OBVIOUSNESS` presets unchanged. (c) Run: n_works 3000 (the main rehearsal used 5000, to fit the CPU budget),
+levels moderate and subtle, seeds 0 and 1, variants full / no_curvature / full_learned, baselines tier-1 rank
+average, XGBoost and the cited-age control, under {rate_ratio, poisson_tail} × {plain, age-matched}; 10.4
+CPU-minutes in total. Mean ± sample sd over the two seeds. Full table with AP columns:
+`results/rehearsal_followup/followup.md` (per-run rows in `followup_runs.csv`; per-setting tables and bundles in
+the four subfolders).
+
+| s_temp | injection | level | pos scored / all | full AUROC | Δ full − no_curv AUROC | learned AUROC | s_temp alone AUROC | tier-1 avg AUROC | XGBoost AUROC | cited-age AUROC |
+|---|---|---|---|---|---|---|---|---|---|---|
+| rate_ratio | plain | moderate | 70.5 / 263 | 0.422 ± 0.041 | −0.074 ± 0.081 | 0.642 ± 0.084 | 0.255 ± 0.037 | 0.705 ± 0.012 | 0.949 ± 0.011 | 0.993 ± 0.001 |
+| poisson_tail | plain | moderate | 70.5 / 263 | 0.441 ± 0.077 | −0.100 ± 0.025 | 0.490 ± 0.126 | 0.541 ± 0.051 | 0.705 ± 0.012 | 0.949 ± 0.011 | 0.993 ± 0.001 |
+| rate_ratio | plain | subtle | 7.5 / 58 | 0.558 ± 0.012 | 0.046 ± 0.065 | 0.472 ± 0.051 | 0.454 ± 0.278 | 0.676 ± 0.054 | 0.907 ± 0.000 | 0.991 ± 0.001 |
+| poisson_tail | plain | subtle | 7.5 / 58 | 0.576 ± 0.037 | 0.046 ± 0.065 | 0.511 ± 0.030 | 0.700 ± 0.183 | 0.676 ± 0.054 | 0.907 ± 0.000 | 0.991 ± 0.001 |
+| rate_ratio | age-matched | moderate | 181.5 / 226.5 | 0.617 ± 0.004 | −0.002 ± 0.003 | 0.592 ± 0.018 | 0.619 ± 0.001 | 0.673 ± 0.016 | 0.793 ± 0.048 | 0.631 ± 0.058 |
+| poisson_tail | age-matched | moderate | 181.5 / 226.5 | 0.579 ± 0.010 | −0.003 ± 0.004 | 0.571 ± 0.034 | 0.582 ± 0.014 | 0.673 ± 0.016 | 0.793 ± 0.048 | 0.631 ± 0.058 |
+| rate_ratio | age-matched | subtle | 51 / 70.5 | 0.652 ± 0.067 | −0.015 ± 0.021 | 0.656 ± 0.053 | 0.667 ± 0.046 | 0.672 ± 0.053 | 0.719 ± 0.076 | 0.650 ± 0.069 |
+| poisson_tail | age-matched | subtle | 51 / 70.5 | 0.580 ± 0.038 | −0.010 ± 0.058 | 0.575 ± 0.021 | 0.581 ± 0.025 | 0.672 ± 0.053 | 0.719 ± 0.076 | 0.650 ± 0.069 |
+
+**Findings.** On the plain injector the Poisson tail removes the inversion of s_temp (alone: moderate AUROC 0.255
+→ 0.541, subtle 0.454 → 0.700 on 7.5 scored positives), but the full model stays at chance (0.441, 0.576) and far
+below the cited-age control (0.99) and XGBoost (0.91 to 0.95). Age matching mostly removes the age shortcut:
+the cited-age control falls from 0.99 to 0.63 to 0.65 (median cited age of scored positives 2,705 days against
+3,501 for negatives at the moderate level, so the match is not exact), and cold start now removes 20 % to 32 % of
+the test positives instead of 70 % to 88 %. Under age matching the full model with the default rate ratio is
+level with the cited-age control (0.617 against 0.631 moderate, 0.652 against 0.650 subtle) but below the tier-1
+rank average (0.67) and XGBoost (0.79, 0.72); the Poisson tail does not help there (0.579, 0.580), and its
+standalone s_temp is weaker than the rate ratio's on age-matched cartels. The curvature-removal delta stays
+within seed noise in every setting (ΔAUROC −0.015 to +0.046, ΔAP at most 0.001) except the plain moderate level,
+where removing curvature *improves* AUROC by 0.074 to 0.100. Two seeds and n_works 3000 make every one of these
+statements provisional; none of them supports a structural or curvature signal yet.
+
+Reproduce (four settings, plain-numpy venv of section 10):
+
+```bash
+PYTHONPATH=src nice -n 10 /home/user/venvs/w2a/bin/python scripts/rehearsal.py \
+    --out-dir data/rehearsal_followup/<stat>__<plain|age_matched> \
+    --results results/rehearsal_followup/<stat>__<plain|age_matched> \
+    --levels moderate subtle --seeds 0 1 --n-works 3000 --variants full no_curvature full_learned \
+    --light --no-tgn --no-pygod --skip-equal-weights --temporal-stat <rate_ratio|poisson_tail> [--age-matched]
+PYTHONPATH=src python scripts/rehearsal_followup_table.py results/rehearsal_followup
+```

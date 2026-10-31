@@ -1,0 +1,9 @@
+group,level,component,n_seeds,weight,AUROC alone,AP alone,mean w*z on top-100
+matrix,moderate,s_embed,2,0.150 ± 0.212,0.496 ± 0.040,0.005 ± 0.001,0.041 ± 0.058
+matrix,moderate,s_geom,2,0.550 ± 0.212,0.432 ± 0.056,0.007 ± 0.002,4.150 ± 1.722
+matrix,moderate,s_temp,2,0.300 ± 0.000,0.541 ± 0.051,0.006 ± 0.002,0.172 ± 0.104
+matrix,moderate,s_curvdyn,2,0.000 ± 0.000,0.475 ± 0.033,0.005 ± 0.001,0.000 ± 0.000
+matrix,subtle,s_embed,2,0.550 ± 0.212,0.513 ± 0.077,0.001 ± 0.000,1.155 ± 1.016
+matrix,subtle,s_geom,2,0.100 ± 0.141,0.474 ± 0.169,0.003 ± 0.004,0.369 ± 0.522
+matrix,subtle,s_temp,2,0.300 ± 0.424,0.700 ± 0.183,0.002 ± 0.002,1.454 ± 2.056
+matrix,subtle,s_curvdyn,2,0.050 ± 0.071,0.462 ± 0.090,0.001 ± 0.000,0.055 ± 0.078
