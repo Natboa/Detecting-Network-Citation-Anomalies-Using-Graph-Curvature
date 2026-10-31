@@ -165,7 +165,7 @@ pipeline:                        # citecurv.pipeline.run_pipeline fallbacks and 
   screen_percentile_low: 0.01    # fallback while curvature.screen_percentile_low is null (S2.3)
   screen_percentile_high: 0.99   # fallback upper cut (inactive at event time: F <= 2)
   orc_radius: 1                  # fallback while curvature.orc_radius is null
-  orc_max_events: null           # optional seeded cap on ORC computations per run
+  orc_max_events: null           # optional seeded cap on ORC computations per run — LEAKY if set (shared across splits; review R1), keep null
   test_share: 0.2                # cutoff rule when no cutoff and no labels
   no_temporal_drop_s_temp: true  # D11 PROVISIONAL
   learned_fit_split: val         # L13 head: val | train | train+val
