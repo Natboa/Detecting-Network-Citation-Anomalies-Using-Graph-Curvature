@@ -196,7 +196,7 @@ def test_split_counts_and_yaml_round_trip(tmp_path):
     }
     path = write_split_yaml(tmp_path / "split.yaml", cutoff=np.int64(365), counts=counts,
                             params={"min_test_pos": 100, "val_frac": 0.1})
-    loaded = yaml.safe_load(open(path, encoding="utf-8"))
+    loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
     assert loaded["cutoff_t"] == 365
     assert loaded["cutoff_date"] == (dt.date(1970, 1, 1) + dt.timedelta(days=365)).isoformat()
     assert loaded["cutoff_date"] == "1971-01-01"
