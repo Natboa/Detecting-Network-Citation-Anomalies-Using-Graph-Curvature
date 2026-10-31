@@ -12,7 +12,7 @@ class MemoryModel(torch.nn.Module):
     def __init__(self, node_raw_features: np.ndarray, edge_raw_features: np.ndarray, neighbor_sampler: NeighborSampler,
                  time_feat_dim: int, model_name: str = 'TGN', num_layers: int = 2, num_heads: int = 2, dropout: float = 0.1,
                  src_node_mean_time_shift: float = 0.0, src_node_std_time_shift: float = 1.0, dst_node_mean_time_shift_dst: float = 0.0,
-                 dst_node_std_time_shift: float = 1.0, device: str = 'cpu'):
+                 dst_node_std_time_shift: float = 1.0, device: str = 'cpu', direction_feat_index: int = -1, edge_dst_node_ids: np.ndarray = None):  # citecurv P5
         """
         General framework for memory-based models, support TGN, DyRep and JODIE.
         :param node_raw_features: ndarray, shape (num_nodes + 1, node_feat_dim)
@@ -45,6 +45,7 @@ class MemoryModel(torch.nn.Module):
         self.src_node_std_time_shift = src_node_std_time_shift
         self.dst_node_mean_time_shift_dst = dst_node_mean_time_shift_dst
         self.dst_node_std_time_shift = dst_node_std_time_shift
+        self.direction_feat_index = direction_feat_index  # citecurv P5
 
         self.model_name = model_name
         # number of nodes, including the padded node
@@ -80,7 +81,7 @@ class MemoryModel(torch.nn.Module):
                                                             time_feat_dim=self.time_feat_dim,
                                                             num_layers=self.num_layers,
                                                             num_heads=self.num_heads,
-                                                            dropout=self.dropout)
+                                                            dropout=self.dropout, direction_feat_index=direction_feat_index, edge_dst_node_ids=edge_dst_node_ids)  # citecurv P5
         else:
             raise ValueError(f'Not implemented error for model_name {self.model_name}!')
 
@@ -154,7 +155,7 @@ class MemoryModel(torch.nn.Module):
                                                                                                 dst_node_ids=src_node_ids,
                                                                                                 dst_node_embeddings=src_node_embeddings,
                                                                                                 node_interact_times=node_interact_times,
-                                                                                                edge_ids=edge_ids)
+                                                                                                edge_ids=edge_ids, receiver_is_dst=True)  # citecurv P5
 
             # store new raw messages for source and destination nodes
             self.memory_bank.store_node_raw_messages(node_ids=unique_src_node_ids, new_node_raw_messages=new_src_node_raw_messages)
@@ -210,7 +211,7 @@ class MemoryModel(torch.nn.Module):
                                             unique_node_timestamps=unique_node_timestamps)
 
     def compute_new_node_raw_messages(self, src_node_ids: np.ndarray, dst_node_ids: np.ndarray, dst_node_embeddings: torch.Tensor,
-                                      node_interact_times: np.ndarray, edge_ids: np.ndarray):
+                                      node_interact_times: np.ndarray, edge_ids: np.ndarray, receiver_is_dst: bool = False):  # citecurv P5
         """
         compute new raw messages for nodes in src_node_ids
         :param src_node_ids: ndarray, shape (batch_size, )
@@ -236,6 +237,9 @@ class MemoryModel(torch.nn.Module):
 
         # Tensor, shape (batch_size, edge_feat_dim)
         edge_features = self.edge_raw_features[torch.from_numpy(edge_ids)]
+        if receiver_is_dst and self.direction_feat_index >= 0:  # citecurv P5: the cited endpoint reads the indicator negated
+            edge_features = edge_features.clone()
+            edge_features[:, self.direction_feat_index] = -edge_features[:, self.direction_feat_index]
 
         # Tensor, shape (batch_size, message_dim = memory_dim + memory_dim + time_feat_dim + edge_feat_dim)
         new_src_node_raw_messages = torch.cat([src_node_memories, dst_node_memories, src_node_delta_time_features, edge_features], dim=1)
@@ -549,7 +553,7 @@ class GraphAttentionEmbedding(nn.Module):
 
     def __init__(self, node_raw_features: torch.Tensor, edge_raw_features: torch.Tensor, neighbor_sampler: NeighborSampler,
                  time_encoder: TimeEncoder, node_feat_dim: int, edge_feat_dim: int, time_feat_dim: int,
-                 num_layers: int = 2, num_heads: int = 2, dropout: float = 0.1):
+                 num_layers: int = 2, num_heads: int = 2, dropout: float = 0.1, direction_feat_index: int = -1, edge_dst_node_ids: np.ndarray = None):  # citecurv P5
         """
         Graph attention embedding module.
         :param node_raw_features: Tensor, shape (num_nodes + 1, node_feat_dim)
@@ -575,6 +579,8 @@ class GraphAttentionEmbedding(nn.Module):
         self.num_layers = num_layers
         self.num_heads = num_heads
         self.dropout = dropout
+        self.direction_feat_index = direction_feat_index  # citecurv P5
+        self.edge_dst_node_ids = edge_dst_node_ids  # citecurv P5: ndarray (num_edges + 1, ), kept out of the state dict
 
         self.temporal_conv_layers = nn.ModuleList([MultiHeadAttention(node_feat_dim=self.node_feat_dim,
                                                                       edge_feat_dim=self.edge_feat_dim,
@@ -648,6 +654,11 @@ class GraphAttentionEmbedding(nn.Module):
 
             # get edge features, shape (batch_size, num_neighbors, edge_feat_dim)
             neighbor_edge_features = self.edge_raw_features[torch.from_numpy(neighbor_edge_ids)]
+            if self.direction_feat_index >= 0:  # citecurv P5: keys whose centre node is the cited endpoint read the indicator negated
+                centre_is_cited = torch.from_numpy(self.edge_dst_node_ids[neighbor_edge_ids] == node_ids[:, np.newaxis]).to(device)
+                neighbor_edge_features = neighbor_edge_features.clone()
+                neighbor_edge_features[..., self.direction_feat_index] = torch.where(centre_is_cited, -neighbor_edge_features[..., self.direction_feat_index],
+                                                                                     neighbor_edge_features[..., self.direction_feat_index])
             # temporal graph convolution
             # Tensor, output shape (batch_size, node_feat_dim + time_feat_dim)
             output, _ = self.temporal_conv_layers[current_layer_num - 1](node_features=node_conv_features,

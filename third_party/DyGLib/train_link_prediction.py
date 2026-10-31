@@ -36,6 +36,9 @@ if __name__ == "__main__":
     node_raw_features, edge_raw_features, full_data, train_data, val_data, test_data, new_node_val_data, new_node_test_data = \
         get_link_prediction_data(dataset_name=args.dataset_name, val_ratio=args.val_ratio, test_ratio=args.test_ratio)
 
+    # citecurv P5: destination node of every edge id (row 0 = padding), to read the direction indicator relative to the receiver
+    edge_dst_node_ids = np.zeros(edge_raw_features.shape[0], dtype=np.longlong); edge_dst_node_ids[full_data.edge_ids] = full_data.dst_node_ids
+
     # initialize training neighbor sampler to retrieve temporal graph
     train_neighbor_sampler = get_neighbor_sampler(data=train_data, sample_neighbor_strategy=args.sample_neighbor_strategy,
                                                   time_scaling_factor=args.time_scaling_factor, seed=0)
@@ -64,9 +67,9 @@ if __name__ == "__main__":
 
     for run in range(args.num_runs):
 
-        set_random_seed(seed=run)
+        set_random_seed(seed=run + args.seed_offset)  # citecurv P7
 
-        args.seed = run
+        args.seed = run + args.seed_offset  # citecurv P7
         args.save_model_name = f'{args.model_name}_seed{args.seed}'
 
         # set up logger
@@ -104,7 +107,8 @@ if __name__ == "__main__":
             dynamic_backbone = MemoryModel(node_raw_features=node_raw_features, edge_raw_features=edge_raw_features, neighbor_sampler=train_neighbor_sampler,
                                            time_feat_dim=args.time_feat_dim, model_name=args.model_name, num_layers=args.num_layers, num_heads=args.num_heads,
                                            dropout=args.dropout, src_node_mean_time_shift=src_node_mean_time_shift, src_node_std_time_shift=src_node_std_time_shift,
-                                           dst_node_mean_time_shift_dst=dst_node_mean_time_shift_dst, dst_node_std_time_shift=dst_node_std_time_shift, device=args.device)
+                                           dst_node_mean_time_shift_dst=dst_node_mean_time_shift_dst, dst_node_std_time_shift=dst_node_std_time_shift, device=args.device,
+                                           direction_feat_index=args.direction_feat_index, edge_dst_node_ids=edge_dst_node_ids)  # citecurv P5
         elif args.model_name == 'CAWN':
             dynamic_backbone = CAWN(node_raw_features=node_raw_features, edge_raw_features=edge_raw_features, neighbor_sampler=train_neighbor_sampler,
                                     time_feat_dim=args.time_feat_dim, position_feat_dim=args.position_feat_dim, walk_length=args.walk_length,

@@ -11,8 +11,7 @@ def get_link_prediction_args(is_evaluation: bool = False):
     """
     # arguments
     parser = argparse.ArgumentParser('Interface for the link prediction task')
-    parser.add_argument('--dataset_name', type=str, help='dataset to be used', default='wikipedia',
-                        choices=['wikipedia', 'reddit', 'mooc', 'lastfm', 'myket', 'enron', 'SocialEvo', 'uci', 'Flights', 'CanParl', 'USLegis', 'UNtrade', 'UNvote', 'Contacts'])
+    parser.add_argument('--dataset_name', type=str, help='dataset to be used', default='wikipedia')  # citecurv P6: upstream limited choices to the 14 benchmark names
     parser.add_argument('--batch_size', type=int, default=200, help='batch size')
     parser.add_argument('--model_name', type=str, default='DyGFormer', help='name of the model, note that EdgeBank is only applicable for evaluation',
                         choices=['JODIE', 'DyRep', 'TGAT', 'TGN', 'CAWN', 'EdgeBank', 'TCL', 'GraphMixer', 'DyGFormer'])
@@ -49,6 +48,8 @@ def get_link_prediction_args(is_evaluation: bool = False):
     parser.add_argument('--negative_sample_strategy', type=str, default='random', choices=['random', 'historical', 'inductive'],
                         help='strategy for the negative edge sampling')
     parser.add_argument('--load_best_configs', action='store_true', default=False, help='whether to load the best configurations')
+    parser.add_argument('--seed_offset', type=int, default=0, help='citecurv P7: run r uses seed r + seed_offset')
+    parser.add_argument('--direction_feat_index', type=int, default=-1, help='citecurv P5: edge-feature column of the citation-direction indicator, -1 = off')
 
     try:
         args = parser.parse_args()
