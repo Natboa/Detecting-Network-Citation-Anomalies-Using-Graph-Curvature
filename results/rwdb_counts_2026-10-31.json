@@ -1,0 +1,199 @@
+{
+  "total_records": 73519,
+  "original_doi_nonnull_rate": 0.9657,
+  "ref_attr_family": {
+    "records": 15456,
+    "unique_papers_with_doi": 15397,
+    "matching_reason_literals": {
+      "Concerns/Issues about Referencing/Attributions": 15456
+    }
+  },
+  "broadened_vocabulary": {
+    "Concerns/Issues about Referencing/Attributions": 15456,
+    "Compromised Peer Review": 12238,
+    "Paper Mill": 11802,
+    "Concerns/Issues about Peer Review": 11765,
+    "Taken via Peer Review": 23
+  },
+  "snapshot": {
+    "date": "2026-10-31",
+    "sha256": "7a729a87837985954a34326202cb98c4bff4b2b142fda8695febb613cf45a7f4",
+    "source_url": "https://gitlab.com/crossref/retraction-watch-data/-/raw/main/retraction_watch.csv",
+    "filename": "rwdb_2026-10-31.csv",
+    "upstream_commit": "a98cc7e2dd37b8affab780096048b261833ecc11",
+    "upstream_commit_title": "Retraction Watch data for 2026-10-30",
+    "note": "downloaded with rwdb.download_snapshot on 2026-10-31; byte-identical (SHA256) to retraction_watch.csv at the upstream commit above"
+  },
+  "status": "refresh for comparison only; data/labels/rwdb_counts.json (2026-07-06) stays the label source until Maor decides whether to adopt this snapshot",
+  "frozen_reference": {
+    "date": "2026-07-06",
+    "sha256": "ae6ea4b099440c85ac2044c897ccb113411bf68cff1fdb51678e3ad5e9d55ea7",
+    "upstream_commit": "21d7124df178ecdd920d05b585f0cae26267aead",
+    "upstream_commit_title": "Retraction Watch data for 2026-07-02",
+    "note": "the frozen 2026-07-06 file is byte-identical (SHA256 verified) to retraction_watch.csv at this upstream commit, so it can be re-downloaded exactly"
+  },
+  "delta_vs_frozen": {
+    "summary_counts": {
+      "total_records": 2748,
+      "ref_attr_records": 560,
+      "ref_attr_unique_papers_with_doi": 555,
+      "original_doi_nonnull_rate": 0.004,
+      "broadened_vocabulary": {
+        "Compromised Peer Review": 854,
+        "Concerns/Issues about Peer Review": 325,
+        "Concerns/Issues about Referencing/Attributions": 560,
+        "Paper Mill": 6,
+        "Taken via Peer Review": 0
+      }
+    },
+    "record_level": {
+      "records_old": 70590,
+      "records_new": 73519,
+      "blank_rows_old": 181,
+      "blank_rows_new": 0,
+      "records_added": 2934,
+      "records_removed": 5,
+      "records_reason_changed": 121,
+      "family_gained": 4,
+      "family_lost": 6,
+      "family_records_old": 14896,
+      "family_records_new": 15456,
+      "family_dois_old": 14842,
+      "family_dois_new": 15397,
+      "family_dois_added": 561,
+      "family_dois_removed": 6,
+      "family_dois_added_by_orig_year": {
+        "2011": 1,
+        "2012": 3,
+        "2013": 1,
+        "2015": 5,
+        "2016": 1,
+        "2018": 15,
+        "2019": 20,
+        "2020": 16,
+        "2021": 50,
+        "2022": 61,
+        "2023": 182,
+        "2024": 104,
+        "2025": 88,
+        "2026": 14
+      }
+    },
+    "shortlist_candidates": {
+      "computing": {
+        "ref_attr_papers": {
+          "2026-07-06": 5859,
+          "2026-10-31": 6076,
+          "delta": 217
+        },
+        "ref_attr_test_papers": {
+          "2026-07-06": 3923,
+          "2026-10-31": 4067,
+          "delta": 144
+        },
+        "broadened_papers": {
+          "2026-07-06": 8690,
+          "2026-10-31": 9207,
+          "delta": 517
+        },
+        "broadened_test_papers": {
+          "2026-07-06": 5059,
+          "2026-10-31": 5214,
+          "delta": 155
+        }
+      },
+      "env_energy": {
+        "ref_attr_papers": {
+          "2026-07-06": 1184,
+          "2026-10-31": 1233,
+          "delta": 49
+        },
+        "ref_attr_test_papers": {
+          "2026-07-06": 888,
+          "2026-10-31": 925,
+          "delta": 37
+        },
+        "broadened_papers": {
+          "2026-07-06": 1754,
+          "2026-10-31": 1837,
+          "delta": 83
+        },
+        "broadened_test_papers": {
+          "2026-07-06": 1148,
+          "2026-10-31": 1189,
+          "delta": 41
+        }
+      },
+      "cell_mol_bio": {
+        "ref_attr_papers": {
+          "2026-07-06": 1497,
+          "2026-10-31": 1506,
+          "delta": 9
+        },
+        "ref_attr_test_papers": {
+          "2026-07-06": 1012,
+          "2026-10-31": 1019,
+          "delta": 7
+        },
+        "broadened_papers": {
+          "2026-07-06": 3873,
+          "2026-10-31": 3913,
+          "delta": 40
+        },
+        "broadened_test_papers": {
+          "2026-07-06": 1604,
+          "2026-10-31": 1633,
+          "delta": 29
+        }
+      },
+      "oncology": {
+        "ref_attr_papers": {
+          "2026-07-06": 1080,
+          "2026-10-31": 1091,
+          "delta": 11
+        },
+        "ref_attr_test_papers": {
+          "2026-07-06": 783,
+          "2026-10-31": 793,
+          "delta": 10
+        },
+        "broadened_papers": {
+          "2026-07-06": 2720,
+          "2026-10-31": 2762,
+          "delta": 42
+        },
+        "broadened_test_papers": {
+          "2026-07-06": 1183,
+          "2026-10-31": 1213,
+          "delta": 30
+        }
+      },
+      "venues_cs": {
+        "ref_attr_papers": {
+          "2026-07-06": 4894,
+          "2026-10-31": 5043,
+          "delta": 149
+        },
+        "ref_attr_test_papers": {
+          "2026-07-06": 3572,
+          "2026-10-31": 3689,
+          "delta": 117
+        },
+        "broadened_papers": {
+          "2026-07-06": 6044,
+          "2026-10-31": 6237,
+          "delta": 193
+        },
+        "broadened_test_papers": {
+          "2026-07-06": 4460,
+          "2026-10-31": 4578,
+          "delta": 118
+        }
+      }
+    },
+    "notes": [
+      "summary_counts use summarize(), which counts every CSV row as a record: the 2026-07-06 file has 181 blank rows (and one row with placeholder dates), the 2026-10-31 file has none, so total_records understates the real growth; record_level compares by Record ID and excludes blank rows",
+      "shortlist_candidates count Retraction-nature papers only (see docs/slice_shortlist.md)"
+    ]
+  }
+}

@@ -1,0 +1,131 @@
+subjects,all_papers,ref_attr_papers,broadened_papers,paper_mill_papers,peer_review_papers
+(B/T) Technology,11063,5370,8452,4594,8003
+(B/T) Computer Science,8592,4090,6599,3062,6341
+(B/T) Data Science,5552,4033,5236,2744,5071
+(SOC) Education,4227,1827,2746,1279,2510
+(B/T) Business - Economics,3299,1035,1466,464,1316
+(HSC) Medicine - Oncology,3658,960,1918,1093,1543
+(ENV) Environmental Sciences,2909,934,1491,399,1246
+(BLS) Genetics,8014,899,3160,2321,1557
+(SOC) Sports and Recreation,1299,836,1140,581,1088
+(HSC) Medicine - Cardiovascular,2347,710,1147,640,1046
+(SOC) Psychology,1824,678,970,435,850
+(PHY) Engineering - Electrical,2037,672,1037,370,844
+(HSC) Radiology/Imaging,1571,666,1046,554,1018
+(BLS) Biology - Cellular,10575,662,2927,2280,1027
+(PHY) Materials Science,2849,607,976,386,725
+(B/T) Business - Management,2211,562,808,271,730
+(B/T) Business - General,1815,557,797,427,752
+(PHY) Energy,1456,555,859,221,770
+(HSC) Medicine - Pharmacology,2801,554,915,549,839
+(BLS) Biochemistry,7343,546,1869,1288,964
+(BLS) Biology - Molecular,4236,511,1305,804,958
+(PHY) Mathematics,2156,507,709,357,648
+(SOC) Linguistics,781,491,664,327,613
+(HSC) Medicine - Surgery,2414,489,889,373,855
+(HSC) Medicine - Neurology,2111,485,903,499,795
+(HSC) Public Health and Safety,1427,480,675,325,586
+(PHY) Engineering - General,1560,404,588,341,538
+(SOC) Communications,824,401,575,231,516
+(HSC) Medicine - Obstetrics/Gynecology,1756,394,659,336,560
+(HUM) Arts - General,581,383,499,285,480
+(HSC) Medicine - Rehabilitation/Therapy,1504,373,653,391,623
+(BLS) Biology - Cancer,6033,368,2275,1802,757
+(HSC) Medicine - Orthopedics,1424,363,643,335,572
+(HSC) Medicine - Pulmonology,1186,361,590,352,517
+(HSC) Medicine - General,1063,353,532,184,476
+(B/T) Transportation,895,342,501,197,458
+(BLS) Agriculture,1211,326,715,228,597
+(B/T) Urban Planning,992,320,486,182,444
+(HSC) Medicine - Nursing,583,318,488,245,480
+(HSC) Medicine - Infectious Disease,1475,315,541,177,472
+(PHY) Engineering - Mechanical,1166,315,504,195,418
+(PHY) Nanotechnology,1504,306,505,227,374
+(HSC) Medicine - Gastroenterology,1454,300,610,341,512
+(HSC) Medicine - Alternative,748,266,430,266,408
+(HSC) Medicine - Pediatrics,965,264,409,187,372
+(HUM) Arts - Music,367,263,342,168,333
+(SOC) Political Science,426,247,292,144,273
+(SOC) Sociology,1067,239,379,116,294
+(B/T) Business - Manufacturing,535,237,344,99,286
+(HSC) Medicine - Immunology,1165,226,421,221,365
+(HSC) Medicine - Urology/Nephrology,890,222,409,217,356
+(HSC) Biostatistics/Epidemiology,905,199,382,228,350
+(B/T) Business - Marketing,615,197,294,114,271
+(ENV) Ecology,828,191,304,74,254
+(PHY) Chemistry,2157,191,284,89,192
+(PHY) Engineering - Structural,798,187,290,92,254
+(B/T) Government,944,186,278,101,242
+(HSC) Sports Science,332,182,241,96,230
+(BLS) Plant Biology/Botany,1361,169,417,108,352
+(BLS) Microbiology,1653,151,355,138,284
+(HSC) Medicine - Diabetes,640,147,274,141,238
+(PHY) Physics,1248,146,282,43,223
+(HSC) Medicine - Pathology,963,145,398,213,374
+(HSC) Medicine - Geriatric,389,144,209,115,199
+(PHY) Engineering - Chemical,1310,138,350,102,215
+(PHY) Statistics,366,137,191,77,178
+(HSC) Medicine - Endocrinology,587,133,239,137,206
+(B/T) International Relations,428,124,181,65,164
+(BLS) Toxicology,2214,123,514,314,242
+(ENV) Ground/Surface Water,673,121,207,50,166
+(HSC) Medicine - Ophthalmology,403,119,183,99,161
+(HSC) Medicine - Anesthesia/Anaesthesia,910,116,174,95,159
+(HSC) Medicine - Otorhinolaryngology,522,116,197,117,171
+(HSC) Medicine - Internal,326,108,161,95,150
+(HSC) Medicine - Psychiatry,485,107,176,87,159
+(PHY) Geology,465,104,158,67,114
+(B/T) Business - Accounting,477,103,200,58,190
+(HSC) Medicine - Dermatology,462,93,251,78,227
+(SOC) Law/Legal Issues,360,86,139,59,116
+(HSC) Medicine - Sports,230,85,132,80,123
+(HUM) Architecture,254,85,130,76,123
+(HSC) Medicine - Dentistry,448,83,120,68,104
+(HSC) Medicine - Drug Design,613,83,162,51,126
+(BLS) Neuroscience,1080,81,206,113,147
+(HSC) Occupational Health and Safety,327,78,121,51,101
+(HSC) Medicine - Cardiology,759,72,130,63,115
+(HSC) Nutrition,250,70,105,51,91
+(HUM) Arts -Literature/Poetry,162,61,80,29,63
+(SOC) Philosophy,123,61,63,50,58
+(ENV) Food Science,278,60,119,44,95
+(BLS) Anatomy/Physiology,669,54,94,57,74
+(BLS) Zoology,737,54,133,34,89
+(ENV) Climate Change,165,48,69,16,49
+(BLS) Nutrition,262,46,81,38,67
+(HUM) Arts - Film Studies,68,42,52,34,51
+(BLS) Biology - General,862,39,128,44,93
+(PHY) Hydrology,207,37,49,14,37
+(PHY) Crystallography/Spectroscopy,528,34,60,18,30
+(HUM) History - Asia,91,26,35,20,32
+(SOC) Criminology,105,23,32,4,29
+(ENV) Climatology,183,22,83,11,72
+(HUM) Journalism,55,22,26,15,25
+(B/T) Business - Public Relations,88,18,23,10,19
+(HSC) Medicine - Transplantation,104,18,29,21,28
+(SOC) Military/Naval Studies,118,15,18,7,16
+(SOC) Ethics/Bioethics,101,13,22,4,17
+(BLS) Parasitology,154,12,22,2,18
+(HSC) Veterinary Science,254,12,41,9,37
+(SOC) Sexual And Marital Studies,89,11,14,2,7
+(HUM) History - General,61,10,11,4,8
+(BLS) Archeology,43,8,9,2,5
+(HUM) Philosophy,73,8,10,0,7
+(SOC) Forensics,36,7,12,1,9
+(BLS) Anthropology,51,5,8,3,5
+(HUM) Cartography,32,5,12,2,11
+(HUM) History - Europe,145,5,8,0,4
+(B/T) Foreign Aid,13,4,6,2,4
+(HUM) Religion,145,4,27,0,25
+(PHY) Astronomy,22,3,3,1,3
+(PHY) Astrophysics,73,2,5,1,3
+(PHY) Cosmology,28,2,3,0,1
+(BLS) Forensic Sciences,21,1,3,2,1
+(HUM) History - Australia,1,1,1,0,0
+(HUM) History - United States,5,1,2,0,1
+(BLS) Paleontology,24,0,1,0,1
+(HUM) Arts - Biography,18,0,0,0,0
+(HUM) History - Africa,6,0,0,0,0
+(HUM) History - North America,12,0,0,0,0
+(HUM) History - South America,5,0,0,0,0
+(PHY) Forensic Sciences,4,0,1,0,1

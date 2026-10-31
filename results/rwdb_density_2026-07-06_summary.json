@@ -1,0 +1,810 @@
+{
+ "tag": "2026-07-06",
+ "natures": [
+  "Retraction"
+ ],
+ "paper_definition": "distinct normalized OriginalPaperDOI; records without a DOI are excluded",
+ "families": {
+  "ref_attr": [
+   "referencing/attributions"
+  ],
+  "broadened": [
+   "referencing/attributions",
+   "paper mill",
+   "peer review"
+  ],
+  "paper_mill": [
+   "paper mill"
+  ],
+  "peer_review": [
+   "peer review"
+  ]
+ },
+ "totals": {
+  "ref_attr": 14596,
+  "broadened": 25226,
+  "paper_mill": 11658,
+  "peer_review": 20958
+ },
+ "concentration": {
+  "ref_attr": {
+   "papers": 14596,
+   "top_publishers": [
+    {
+     "publisher": "Hindawi",
+     "papers": 8421,
+     "share": 0.5769388873664018
+    },
+    {
+     "publisher": "Springer - Nature Publishing Group",
+     "papers": 1157,
+     "share": 0.07926829268292683
+    },
+    {
+     "publisher": "IOS Press (bought by Sage November 2023)",
+     "papers": 1117,
+     "share": 0.07652781583995616
+    },
+    {
+     "publisher": "EDP Sciences",
+     "papers": 718,
+     "share": 0.04919155933132365
+    },
+    {
+     "publisher": "Springer",
+     "papers": 660,
+     "share": 0.04521786790901617
+    }
+   ],
+   "top10_journals_share": 0.4672513017265004,
+   "events_ge_min": {
+    "min_size": 50,
+    "events": 32,
+    "papers": 11310,
+    "share": 0.7748698273499589
+   },
+   "largest_event": {
+    "publisher": "IOS Press (bought by Sage November 2023)",
+    "ret_date": "2025-04-17",
+    "papers": 655
+   },
+   "lag_years": {
+    "0.5": 1.34,
+    "0.75": 1.9,
+    "0.9": 2.93
+   }
+  },
+  "broadened": {
+   "papers": 25226,
+   "top_publishers": [
+    {
+     "publisher": "Hindawi",
+     "papers": 11126,
+     "share": 0.44105288194719733
+    },
+    {
+     "publisher": "Springer",
+     "papers": 2019,
+     "share": 0.08003647030841196
+    },
+    {
+     "publisher": "IOS Press (bought by Sage November 2023)",
+     "papers": 1681,
+     "share": 0.06663759613097597
+    },
+    {
+     "publisher": "Springer - Nature Publishing Group",
+     "papers": 1598,
+     "share": 0.0633473400459843
+    },
+    {
+     "publisher": "Wiley",
+     "papers": 1327,
+     "share": 0.052604455720288594
+    }
+   ],
+   "top10_journals_share": 0.37469277729326883,
+   "events_ge_min": {
+    "min_size": 50,
+    "events": 50,
+    "papers": 15569,
+    "share": 0.6171806865931975
+   },
+   "largest_event": {
+    "publisher": "IOS Press (bought by Sage November 2023)",
+    "ret_date": "2025-04-17",
+    "papers": 660
+   },
+   "lag_years": {
+    "0.5": 1.46,
+    "0.75": 2.19,
+    "0.9": 3.61
+   }
+  }
+ },
+ "candidates": [
+  {
+   "name": "computing",
+   "description": "Computer science and data science papers",
+   "subjects": [
+    "(B/T) Computer Science",
+    "(B/T) Data Science"
+   ],
+   "years": [
+    2018,
+    2023
+   ],
+   "test_years": [
+    2022,
+    2023
+   ],
+   "openalex": {
+    "filter": {
+     "primary_topic": {
+      "subfield": {
+       "id": "1702|1705"
+      }
+     }
+    },
+    "labels": "1702 Artificial Intelligence | 1705 Computer Networks and Communications",
+    "resolve": [
+     "https://api.openalex.org/topics?filter=subfield.id:1702&per-page=1&select=id,display_name,subfield,field",
+     "https://api.openalex.org/topics?filter=subfield.id:1705&per-page=1&select=id,display_name,subfield,field"
+    ],
+    "mapping_status": "subfield IDs and names checked against OpenAlex's published topic hierarchy (github.com/ourresearch/openalex-topic-classification, v2/changes/subfields.csv, commit 98df3b96, 2026-10-06); live filter behaviour unverified because api.openalex.org was unreachable when this was written"
+   },
+   "rwdb_counts": {
+    "name": "computing",
+    "years": "2018-2023",
+    "test_years": "2022-2023",
+    "ref_attr_papers": 5859,
+    "ref_attr_test_papers": 3923,
+    "broadened_papers": 8690,
+    "broadened_test_papers": 5059,
+    "ref_attr_2018": 107,
+    "ref_attr_2019": 259,
+    "ref_attr_2020": 252,
+    "ref_attr_2021": 1318,
+    "ref_attr_2022": 3115,
+    "ref_attr_2023": 808,
+    "top_publisher": "Hindawi",
+    "top_publisher_share": 0.6245093019,
+    "top_event_share": 0.0809011777,
+    "n_journals": 158,
+    "passes_label_criteria": true
+   },
+   "openalex_queries": [
+    {
+     "name": "works_by_year",
+     "filter": {
+      "primary_topic": {
+       "subfield": {
+        "id": "1702|1705"
+       }
+      },
+      "publication_year": "2018-2023"
+     },
+     "group_by": "publication_year",
+     "sample": null,
+     "seed": null,
+     "select": null,
+     "url": "https://api.openalex.org/works?filter=primary_topic.subfield.id:1702|1705,publication_year:2018-2023&group_by=publication_year"
+    },
+    {
+     "name": "with_refs_by_year",
+     "filter": {
+      "primary_topic": {
+       "subfield": {
+        "id": "1702|1705"
+       }
+      },
+      "publication_year": "2018-2023",
+      "has_references": true
+     },
+     "group_by": "publication_year",
+     "sample": null,
+     "seed": null,
+     "select": null,
+     "url": "https://api.openalex.org/works?filter=primary_topic.subfield.id:1702|1705,publication_year:2018-2023,has_references:true&group_by=publication_year"
+    },
+    {
+     "name": "retracted_oa_by_year",
+     "filter": {
+      "primary_topic": {
+       "subfield": {
+        "id": "1702|1705"
+       }
+      },
+      "publication_year": "2018-2023",
+      "is_retracted": true
+     },
+     "group_by": "publication_year",
+     "sample": null,
+     "seed": null,
+     "select": null,
+     "url": "https://api.openalex.org/works?filter=primary_topic.subfield.id:1702|1705,publication_year:2018-2023,is_retracted:true&group_by=publication_year"
+    },
+    {
+     "name": "refcount_sample",
+     "filter": {
+      "primary_topic": {
+       "subfield": {
+        "id": "1702|1705"
+       }
+      },
+      "publication_year": "2018-2023"
+     },
+     "group_by": null,
+     "sample": 100,
+     "seed": 0,
+     "select": "id,publication_year,referenced_works",
+     "url": "https://api.openalex.org/works?filter=primary_topic.subfield.id:1702|1705,publication_year:2018-2023&sample=100&seed=0&select=id,publication_year,referenced_works&per_page=100"
+    },
+    {
+     "name": "works_by_subfield",
+     "filter": {
+      "primary_topic": {
+       "subfield": {
+        "id": "1702|1705"
+       }
+      },
+      "publication_year": "2018-2023"
+     },
+     "group_by": "primary_topic.subfield.id",
+     "sample": null,
+     "seed": null,
+     "select": null,
+     "url": "https://api.openalex.org/works?filter=primary_topic.subfield.id:1702|1705,publication_year:2018-2023&group_by=primary_topic.subfield.id"
+    },
+    {
+     "name": "works_by_topic",
+     "filter": {
+      "primary_topic": {
+       "subfield": {
+        "id": "1702|1705"
+       }
+      },
+      "publication_year": "2018-2023"
+     },
+     "group_by": "primary_topic.id",
+     "sample": null,
+     "seed": null,
+     "select": null,
+     "url": "https://api.openalex.org/works?filter=primary_topic.subfield.id:1702|1705,publication_year:2018-2023&group_by=primary_topic.id"
+    }
+   ]
+  },
+  {
+   "name": "env_energy",
+   "description": "Environmental science and energy papers",
+   "subjects": [
+    "(ENV) Environmental Sciences",
+    "(PHY) Energy"
+   ],
+   "years": [
+    2018,
+    2023
+   ],
+   "test_years": [
+    2022,
+    2023
+   ],
+   "openalex": {
+    "filter": {
+     "primary_topic": {
+      "subfield": {
+       "id": "2310|2105"
+      }
+     }
+    },
+    "labels": "2310 Pollution | 2105 Renewable Energy, Sustainability and the Environment",
+    "resolve": [
+     "https://api.openalex.org/topics?filter=subfield.id:2310&per-page=1&select=id,display_name,subfield,field",
+     "https://api.openalex.org/topics?filter=subfield.id:2105&per-page=1&select=id,display_name,subfield,field"
+    ],
+    "mapping_status": "subfield IDs and names checked against OpenAlex's published topic hierarchy (github.com/ourresearch/openalex-topic-classification, v2/changes/subfields.csv, commit 98df3b96, 2026-10-06); live filter behaviour unverified because api.openalex.org was unreachable when this was written"
+   },
+   "rwdb_counts": {
+    "name": "env_energy",
+    "years": "2018-2023",
+    "test_years": "2022-2023",
+    "ref_attr_papers": 1184,
+    "ref_attr_test_papers": 888,
+    "broadened_papers": 1754,
+    "broadened_test_papers": 1148,
+    "ref_attr_2018": 16,
+    "ref_attr_2019": 29,
+    "ref_attr_2020": 55,
+    "ref_attr_2021": 196,
+    "ref_attr_2022": 576,
+    "ref_attr_2023": 312,
+    "top_publisher": "Hindawi",
+    "top_publisher_share": 0.4130067568,
+    "top_event_share": 0.0599662162,
+    "n_journals": 104,
+    "passes_label_criteria": true
+   },
+   "openalex_queries": [
+    {
+     "name": "works_by_year",
+     "filter": {
+      "primary_topic": {
+       "subfield": {
+        "id": "2310|2105"
+       }
+      },
+      "publication_year": "2018-2023"
+     },
+     "group_by": "publication_year",
+     "sample": null,
+     "seed": null,
+     "select": null,
+     "url": "https://api.openalex.org/works?filter=primary_topic.subfield.id:2310|2105,publication_year:2018-2023&group_by=publication_year"
+    },
+    {
+     "name": "with_refs_by_year",
+     "filter": {
+      "primary_topic": {
+       "subfield": {
+        "id": "2310|2105"
+       }
+      },
+      "publication_year": "2018-2023",
+      "has_references": true
+     },
+     "group_by": "publication_year",
+     "sample": null,
+     "seed": null,
+     "select": null,
+     "url": "https://api.openalex.org/works?filter=primary_topic.subfield.id:2310|2105,publication_year:2018-2023,has_references:true&group_by=publication_year"
+    },
+    {
+     "name": "retracted_oa_by_year",
+     "filter": {
+      "primary_topic": {
+       "subfield": {
+        "id": "2310|2105"
+       }
+      },
+      "publication_year": "2018-2023",
+      "is_retracted": true
+     },
+     "group_by": "publication_year",
+     "sample": null,
+     "seed": null,
+     "select": null,
+     "url": "https://api.openalex.org/works?filter=primary_topic.subfield.id:2310|2105,publication_year:2018-2023,is_retracted:true&group_by=publication_year"
+    },
+    {
+     "name": "refcount_sample",
+     "filter": {
+      "primary_topic": {
+       "subfield": {
+        "id": "2310|2105"
+       }
+      },
+      "publication_year": "2018-2023"
+     },
+     "group_by": null,
+     "sample": 100,
+     "seed": 0,
+     "select": "id,publication_year,referenced_works",
+     "url": "https://api.openalex.org/works?filter=primary_topic.subfield.id:2310|2105,publication_year:2018-2023&sample=100&seed=0&select=id,publication_year,referenced_works&per_page=100"
+    },
+    {
+     "name": "works_by_subfield",
+     "filter": {
+      "primary_topic": {
+       "subfield": {
+        "id": "2310|2105"
+       }
+      },
+      "publication_year": "2018-2023"
+     },
+     "group_by": "primary_topic.subfield.id",
+     "sample": null,
+     "seed": null,
+     "select": null,
+     "url": "https://api.openalex.org/works?filter=primary_topic.subfield.id:2310|2105,publication_year:2018-2023&group_by=primary_topic.subfield.id"
+    },
+    {
+     "name": "works_by_topic",
+     "filter": {
+      "primary_topic": {
+       "subfield": {
+        "id": "2310|2105"
+       }
+      },
+      "publication_year": "2018-2023"
+     },
+     "group_by": "primary_topic.id",
+     "sample": null,
+     "seed": null,
+     "select": null,
+     "url": "https://api.openalex.org/works?filter=primary_topic.subfield.id:2310|2105,publication_year:2018-2023&group_by=primary_topic.id"
+    }
+   ]
+  },
+  {
+   "name": "cell_mol_bio",
+   "description": "Cell biology, molecular biology, genetics and biochemistry papers",
+   "subjects": [
+    "(BLS) Biology - Cellular",
+    "(BLS) Biology - Molecular",
+    "(BLS) Genetics",
+    "(BLS) Biochemistry"
+   ],
+   "years": [
+    2018,
+    2023
+   ],
+   "test_years": [
+    2022,
+    2023
+   ],
+   "openalex": {
+    "filter": {
+     "primary_topic": {
+      "subfield": {
+       "id": "1307|1312|1311|1303"
+      }
+     }
+    },
+    "labels": "1307 Cell Biology | 1312 Molecular Biology | 1311 Genetics | 1303 Biochemistry",
+    "resolve": [
+     "https://api.openalex.org/topics?filter=subfield.id:1307&per-page=1&select=id,display_name,subfield,field",
+     "https://api.openalex.org/topics?filter=subfield.id:1312&per-page=1&select=id,display_name,subfield,field",
+     "https://api.openalex.org/topics?filter=subfield.id:1311&per-page=1&select=id,display_name,subfield,field",
+     "https://api.openalex.org/topics?filter=subfield.id:1303&per-page=1&select=id,display_name,subfield,field"
+    ],
+    "mapping_status": "subfield IDs and names checked against OpenAlex's published topic hierarchy (github.com/ourresearch/openalex-topic-classification, v2/changes/subfields.csv, commit 98df3b96, 2026-10-06); live filter behaviour unverified because api.openalex.org was unreachable when this was written"
+   },
+   "rwdb_counts": {
+    "name": "cell_mol_bio",
+    "years": "2018-2023",
+    "test_years": "2022-2023",
+    "ref_attr_papers": 1497,
+    "ref_attr_test_papers": 1012,
+    "broadened_papers": 3873,
+    "broadened_test_papers": 1604,
+    "ref_attr_2018": 17,
+    "ref_attr_2019": 43,
+    "ref_attr_2020": 85,
+    "ref_attr_2021": 340,
+    "ref_attr_2022": 904,
+    "ref_attr_2023": 108,
+    "top_publisher": "Hindawi",
+    "top_publisher_share": 0.7227788911,
+    "top_event_share": 0.1048764195,
+    "n_journals": 107,
+    "passes_label_criteria": true
+   },
+   "openalex_queries": [
+    {
+     "name": "works_by_year",
+     "filter": {
+      "primary_topic": {
+       "subfield": {
+        "id": "1307|1312|1311|1303"
+       }
+      },
+      "publication_year": "2018-2023"
+     },
+     "group_by": "publication_year",
+     "sample": null,
+     "seed": null,
+     "select": null,
+     "url": "https://api.openalex.org/works?filter=primary_topic.subfield.id:1307|1312|1311|1303,publication_year:2018-2023&group_by=publication_year"
+    },
+    {
+     "name": "with_refs_by_year",
+     "filter": {
+      "primary_topic": {
+       "subfield": {
+        "id": "1307|1312|1311|1303"
+       }
+      },
+      "publication_year": "2018-2023",
+      "has_references": true
+     },
+     "group_by": "publication_year",
+     "sample": null,
+     "seed": null,
+     "select": null,
+     "url": "https://api.openalex.org/works?filter=primary_topic.subfield.id:1307|1312|1311|1303,publication_year:2018-2023,has_references:true&group_by=publication_year"
+    },
+    {
+     "name": "retracted_oa_by_year",
+     "filter": {
+      "primary_topic": {
+       "subfield": {
+        "id": "1307|1312|1311|1303"
+       }
+      },
+      "publication_year": "2018-2023",
+      "is_retracted": true
+     },
+     "group_by": "publication_year",
+     "sample": null,
+     "seed": null,
+     "select": null,
+     "url": "https://api.openalex.org/works?filter=primary_topic.subfield.id:1307|1312|1311|1303,publication_year:2018-2023,is_retracted:true&group_by=publication_year"
+    },
+    {
+     "name": "refcount_sample",
+     "filter": {
+      "primary_topic": {
+       "subfield": {
+        "id": "1307|1312|1311|1303"
+       }
+      },
+      "publication_year": "2018-2023"
+     },
+     "group_by": null,
+     "sample": 100,
+     "seed": 0,
+     "select": "id,publication_year,referenced_works",
+     "url": "https://api.openalex.org/works?filter=primary_topic.subfield.id:1307|1312|1311|1303,publication_year:2018-2023&sample=100&seed=0&select=id,publication_year,referenced_works&per_page=100"
+    },
+    {
+     "name": "works_by_subfield",
+     "filter": {
+      "primary_topic": {
+       "subfield": {
+        "id": "1307|1312|1311|1303"
+       }
+      },
+      "publication_year": "2018-2023"
+     },
+     "group_by": "primary_topic.subfield.id",
+     "sample": null,
+     "seed": null,
+     "select": null,
+     "url": "https://api.openalex.org/works?filter=primary_topic.subfield.id:1307|1312|1311|1303,publication_year:2018-2023&group_by=primary_topic.subfield.id"
+    },
+    {
+     "name": "works_by_topic",
+     "filter": {
+      "primary_topic": {
+       "subfield": {
+        "id": "1307|1312|1311|1303"
+       }
+      },
+      "publication_year": "2018-2023"
+     },
+     "group_by": "primary_topic.id",
+     "sample": null,
+     "seed": null,
+     "select": null,
+     "url": "https://api.openalex.org/works?filter=primary_topic.subfield.id:1307|1312|1311|1303,publication_year:2018-2023&group_by=primary_topic.id"
+    }
+   ]
+  },
+  {
+   "name": "oncology",
+   "description": "Oncology and cancer biology papers",
+   "subjects": [
+    "(HSC) Medicine - Oncology",
+    "(BLS) Biology - Cancer"
+   ],
+   "years": [
+    2018,
+    2023
+   ],
+   "test_years": [
+    2022,
+    2023
+   ],
+   "openalex": {
+    "filter": {
+     "primary_topic": {
+      "subfield": {
+       "id": "2730|1306"
+      }
+     }
+    },
+    "labels": "2730 Oncology | 1306 Cancer Research",
+    "resolve": [
+     "https://api.openalex.org/topics?filter=subfield.id:2730&per-page=1&select=id,display_name,subfield,field",
+     "https://api.openalex.org/topics?filter=subfield.id:1306&per-page=1&select=id,display_name,subfield,field"
+    ],
+    "mapping_status": "subfield IDs and names checked against OpenAlex's published topic hierarchy (github.com/ourresearch/openalex-topic-classification, v2/changes/subfields.csv, commit 98df3b96, 2026-10-06); live filter behaviour unverified because api.openalex.org was unreachable when this was written"
+   },
+   "rwdb_counts": {
+    "name": "oncology",
+    "years": "2018-2023",
+    "test_years": "2022-2023",
+    "ref_attr_papers": 1080,
+    "ref_attr_test_papers": 783,
+    "broadened_papers": 2720,
+    "broadened_test_papers": 1183,
+    "ref_attr_2018": 14,
+    "ref_attr_2019": 24,
+    "ref_attr_2020": 48,
+    "ref_attr_2021": 211,
+    "ref_attr_2022": 704,
+    "ref_attr_2023": 79,
+    "top_publisher": "Hindawi",
+    "top_publisher_share": 0.7851851852,
+    "top_event_share": 0.0888888889,
+    "n_journals": 70,
+    "passes_label_criteria": true
+   },
+   "openalex_queries": [
+    {
+     "name": "works_by_year",
+     "filter": {
+      "primary_topic": {
+       "subfield": {
+        "id": "2730|1306"
+       }
+      },
+      "publication_year": "2018-2023"
+     },
+     "group_by": "publication_year",
+     "sample": null,
+     "seed": null,
+     "select": null,
+     "url": "https://api.openalex.org/works?filter=primary_topic.subfield.id:2730|1306,publication_year:2018-2023&group_by=publication_year"
+    },
+    {
+     "name": "with_refs_by_year",
+     "filter": {
+      "primary_topic": {
+       "subfield": {
+        "id": "2730|1306"
+       }
+      },
+      "publication_year": "2018-2023",
+      "has_references": true
+     },
+     "group_by": "publication_year",
+     "sample": null,
+     "seed": null,
+     "select": null,
+     "url": "https://api.openalex.org/works?filter=primary_topic.subfield.id:2730|1306,publication_year:2018-2023,has_references:true&group_by=publication_year"
+    },
+    {
+     "name": "retracted_oa_by_year",
+     "filter": {
+      "primary_topic": {
+       "subfield": {
+        "id": "2730|1306"
+       }
+      },
+      "publication_year": "2018-2023",
+      "is_retracted": true
+     },
+     "group_by": "publication_year",
+     "sample": null,
+     "seed": null,
+     "select": null,
+     "url": "https://api.openalex.org/works?filter=primary_topic.subfield.id:2730|1306,publication_year:2018-2023,is_retracted:true&group_by=publication_year"
+    },
+    {
+     "name": "refcount_sample",
+     "filter": {
+      "primary_topic": {
+       "subfield": {
+        "id": "2730|1306"
+       }
+      },
+      "publication_year": "2018-2023"
+     },
+     "group_by": null,
+     "sample": 100,
+     "seed": 0,
+     "select": "id,publication_year,referenced_works",
+     "url": "https://api.openalex.org/works?filter=primary_topic.subfield.id:2730|1306,publication_year:2018-2023&sample=100&seed=0&select=id,publication_year,referenced_works&per_page=100"
+    },
+    {
+     "name": "works_by_subfield",
+     "filter": {
+      "primary_topic": {
+       "subfield": {
+        "id": "2730|1306"
+       }
+      },
+      "publication_year": "2018-2023"
+     },
+     "group_by": "primary_topic.subfield.id",
+     "sample": null,
+     "seed": null,
+     "select": null,
+     "url": "https://api.openalex.org/works?filter=primary_topic.subfield.id:2730|1306,publication_year:2018-2023&group_by=primary_topic.subfield.id"
+    },
+    {
+     "name": "works_by_topic",
+     "filter": {
+      "primary_topic": {
+       "subfield": {
+        "id": "2730|1306"
+       }
+      },
+      "publication_year": "2018-2023"
+     },
+     "group_by": "primary_topic.id",
+     "sample": null,
+     "seed": null,
+     "select": null,
+     "url": "https://api.openalex.org/works?filter=primary_topic.subfield.id:2730|1306,publication_year:2018-2023&group_by=primary_topic.id"
+    }
+   ]
+  },
+  {
+   "name": "venues_cs",
+   "description": "The ten journals with the most Referencing/Attributions retractions among computing papers (venue-anchored fallback)",
+   "journals": [
+    "Journal of Intelligent & Fuzzy Systems",
+    "Computational Intelligence and Neuroscience",
+    "Soft Computing",
+    "Wireless Communications and Mobile Computing",
+    "Security and Communication Networks",
+    "Journal of Sensors",
+    "Mobile Information Systems",
+    "Mathematical Problems in Engineering",
+    "Complexity",
+    "Scientific Programming"
+   ],
+   "years": [
+    2018,
+    2023
+   ],
+   "test_years": [
+    2022,
+    2023
+   ],
+   "openalex": {
+    "needs_resolution": true,
+    "filter": {
+     "primary_location": {
+      "source": {
+       "id": "<ten S-ids from the resolve step>"
+      }
+     }
+    },
+    "resolve": [
+     "https://api.openalex.org/sources?search=Computational%20Intelligence%20and%20Neuroscience&select=id,display_name,issn_l,works_count",
+     "(one /sources?search= call per journal name in `journals`)"
+    ],
+    "mapping_status": "source IDs not resolved yet (needs the live API)"
+   },
+   "rwdb_counts": {
+    "name": "venues_cs",
+    "years": "2018-2023",
+    "test_years": "2022-2023",
+    "ref_attr_papers": 4894,
+    "ref_attr_test_papers": 3572,
+    "broadened_papers": 6044,
+    "broadened_test_papers": 4460,
+    "ref_attr_2018": 47,
+    "ref_attr_2019": 190,
+    "ref_attr_2020": 274,
+    "ref_attr_2021": 811,
+    "ref_attr_2022": 2928,
+    "ref_attr_2023": 644,
+    "top_publisher": "Hindawi",
+    "top_publisher_share": 0.7065794851,
+    "top_event_share": 0.1060482223,
+    "n_journals": 10,
+    "passes_label_criteria": true
+   },
+   "openalex_queries": []
+  }
+ ],
+ "files": [
+  "rwdb_density_2026-07-06_natures.csv",
+  "rwdb_density_2026-07-06_subjects.csv",
+  "rwdb_density_2026-07-06_subject_groups_year.csv",
+  "rwdb_density_2026-07-06_subjects_year.csv",
+  "rwdb_density_2026-07-06_orig_year.csv",
+  "rwdb_density_2026-07-06_ret_year.csv",
+  "rwdb_density_2026-07-06_orig_x_ret.csv",
+  "rwdb_density_2026-07-06_publishers.csv",
+  "rwdb_density_2026-07-06_journals.csv",
+  "rwdb_density_2026-07-06_countries.csv",
+  "rwdb_density_2026-07-06_mass_events.csv",
+  "rwdb_density_2026-07-06_cooccurrence.csv",
+  "rwdb_density_2026-07-06_candidates.csv"
+ ]
+}

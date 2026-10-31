@@ -1,0 +1,126 @@
+{
+ "source": "github.com/ourresearch/openalex-topic-classification, v2/changes/subfields.csv and topics.csv, commit 98df3b96c36128819075dd86949c9f18411fab40 (2026-10-06), MIT licence",
+ "definition": "works whose primary topic is in the subfield, all publication years and all work types the version-2 classifier scored on 2026-10-05; an upper bound for any year-limited slice, not a slice measurement",
+ "rows": [
+  {
+   "candidate": "computing",
+   "subfield_id": "1702",
+   "display_name": "Artificial Intelligence",
+   "works_primary_all_years": 4624449,
+   "share_of_v1_works_still_here": 0.2496,
+   "n_topics": 77,
+   "topic_works_median": 41996,
+   "topics_under_300k": 77
+  },
+  {
+   "candidate": "computing",
+   "subfield_id": "1705",
+   "display_name": "Computer Networks and Communications",
+   "works_primary_all_years": 2687539,
+   "share_of_v1_works_still_here": 0.4587,
+   "n_topics": 43,
+   "topic_works_median": 58593,
+   "topics_under_300k": 43
+  },
+  {
+   "candidate": "computing",
+   "subfield_id": "total",
+   "works_primary_all_years": 7311988
+  },
+  {
+   "candidate": "env_energy",
+   "subfield_id": "2310",
+   "display_name": "Pollution",
+   "works_primary_all_years": 923867,
+   "share_of_v1_works_still_here": 0.4915,
+   "n_topics": 11,
+   "topic_works_median": 63302,
+   "topics_under_300k": 11
+  },
+  {
+   "candidate": "env_energy",
+   "subfield_id": "2105",
+   "display_name": "Renewable Energy, Sustainability and the Environment",
+   "works_primary_all_years": 1439415,
+   "share_of_v1_works_still_here": 0.4738,
+   "n_topics": 22,
+   "topic_works_median": 47326,
+   "topics_under_300k": 22
+  },
+  {
+   "candidate": "env_energy",
+   "subfield_id": "total",
+   "works_primary_all_years": 2363282
+  },
+  {
+   "candidate": "cell_mol_bio",
+   "subfield_id": "1307",
+   "display_name": "Cell Biology",
+   "works_primary_all_years": 1137390,
+   "share_of_v1_works_still_here": 0.3785,
+   "n_topics": 17,
+   "topic_works_median": 42352,
+   "topics_under_300k": 16
+  },
+  {
+   "candidate": "cell_mol_bio",
+   "subfield_id": "1312",
+   "display_name": "Molecular Biology",
+   "works_primary_all_years": 9008768,
+   "share_of_v1_works_still_here": 0.4024,
+   "n_topics": 135,
+   "topic_works_median": 38350,
+   "topics_under_300k": 132
+  },
+  {
+   "candidate": "cell_mol_bio",
+   "subfield_id": "1311",
+   "display_name": "Genetics",
+   "works_primary_all_years": 5063688,
+   "share_of_v1_works_still_here": 0.384,
+   "n_topics": 40,
+   "topic_works_median": 53442,
+   "topics_under_300k": 38
+  },
+  {
+   "candidate": "cell_mol_bio",
+   "subfield_id": "1303",
+   "display_name": "Biochemistry",
+   "works_primary_all_years": 221863,
+   "share_of_v1_works_still_here": 0.1636,
+   "n_topics": 7,
+   "topic_works_median": 23032,
+   "topics_under_300k": 7
+  },
+  {
+   "candidate": "cell_mol_bio",
+   "subfield_id": "total",
+   "works_primary_all_years": 15431709
+  },
+  {
+   "candidate": "oncology",
+   "subfield_id": "2730",
+   "display_name": "Oncology",
+   "works_primary_all_years": 2162835,
+   "share_of_v1_works_still_here": 0.4579,
+   "n_topics": 34,
+   "topic_works_median": 44880,
+   "topics_under_300k": 34
+  },
+  {
+   "candidate": "oncology",
+   "subfield_id": "1306",
+   "display_name": "Cancer Research",
+   "works_primary_all_years": 953652,
+   "share_of_v1_works_still_here": 0.3974,
+   "n_topics": 13,
+   "topic_works_median": 67004,
+   "topics_under_300k": 13
+  },
+  {
+   "candidate": "oncology",
+   "subfield_id": "total",
+   "works_primary_all_years": 3116487
+  }
+ ]
+}
