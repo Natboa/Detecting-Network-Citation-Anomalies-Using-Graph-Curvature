@@ -200,16 +200,26 @@ def _group(r) -> str:
 
 
 def write_bundle(records, path) -> Path:
-    """Compact one-line-per-run bundle (only the keys the tables read), sorted for a stable diff."""
+    """Compact one-line-per-run bundle, sorted for a stable diff. It keeps only what tables() reads: the
+    per-component metrics of "full" model runs (the components table), and gate values with long lists
+    replaced by "<n items>" (as the gates table prints them). tables(bundle) == tables(folder)."""
     rows = []
     for r in records:
         row = {k: r.get(k) for k in BUNDLE_KEYS if k in r}
+        is_full = r.get("kind") == "model" and r.get("method") == "full"
+        for key in ("test_components", "test_top100_contribution"):
+            if key in row and not is_full:
+                del row[key]
         if row.get("test_components"):
             row["test_components"] = {c: {k: v.get(k) for k in ("auroc", "ap")}
                                       for c, v in row["test_components"].items()}
         if row.get("test_top100_contribution"):
             row["test_top100_contribution"] = {k: row["test_top100_contribution"].get(k)
                                                for k in ("k", "n_pos", "mean_contribution")}
+        if row.get("gates"):
+            row["gates"] = {name: {**g, "value": {k: (f"<{len(v)} items>" if isinstance(v, list) and len(v) > 5
+                                                      else v) for k, v in g["value"].items()}}
+                            if isinstance(g.get("value"), dict) else g for name, g in row["gates"].items()}
         rows.append(row)
     rows.sort(key=lambda r: (_group(r), str((r.get("tags") or {}).get("level", "")), r["kind"], r["method"],
                              int(r["seed"])))
@@ -344,7 +354,8 @@ def tables(source, *, control_method="dst_age") -> dict:
         others = [m for m in _method_order(d) if m not in VARIANTS]
         base = _summary_rows(d, others, key)
         base.sort(key=lambda r: -np.nan_to_num(r.get("_ap_mean", np.nan), nan=-1.0))
-        main += _summary_rows(d, [m for m in ("full", "no_curvature") if m in set(d["method"])], key) + base
+        lead = [m for m in ("full", "full_learned", "no_curvature") if m in set(d["method"])]
+        main += _summary_rows(d, lead, key) + base
 
         for m in [v for v in VARIANTS if v in set(d["method"])]:
             row = _summary_rows(d, [m], key)[0]
@@ -358,6 +369,9 @@ def tables(source, *, control_method="dst_age") -> dict:
             abl.append(row)
 
         if {"full", "no_curvature"} <= set(d["method"]):
+            f_runs = d[d["method"] == "full"]
+            prevalence = float((f_runs["n_pos"] / f_runs["n"]).mean()) if {"n_pos", "n"} <= set(d) else np.nan
+            chance = {"AP": f"{prevalence:.4f}", "AUROC": "0.500", "P@100": f"{prevalence:.4f}"}
             for col, label in (("ap", "AP"), ("auroc", "AUROC"), ("p_at_100", "P@100")):
                 diffs, seeds = _paired(d, "full", "no_curvature", col)
                 mean, sd, n = _ms(diffs.tolist())
@@ -369,7 +383,7 @@ def tables(source, *, control_method="dst_age") -> dict:
                 delta.append({**key, "metric": label, "full": _fmt(f_mean, f_sd, n),
                               "no_curvature": _fmt(c_mean, c_sd, n), "delta (full - no_curv)": _fmt(mean, sd, n),
                               "per-seed deltas": ", ".join(f"s{s}: {x:+.4f}" for s, x in zip(seeds, diffs)),
-                              "n_seeds": n,
+                              "n_seeds": n, "chance level": chance[label],
                               "verdict": ("outside seed noise" if outside else "within seed noise") if n > 1
                               else "one seed: no noise estimate",
                               "_delta_mean": mean, "_delta_sd": sd})
@@ -481,7 +495,7 @@ def _md_table(df: pd.DataFrame) -> str:
         if x is None or (isinstance(x, float) and math.isnan(x)):
             return ""
         if isinstance(x, float):
-            return f"{x:.4g}"
+            return f"{x:.0f}" if x.is_integer() or abs(x) >= 1000 else f"{x:.4g}"
         return str(x).replace("|", "\\|")
 
     lines = ["| " + " | ".join(map(str, cols)) + " |", "|" + "|".join("---" for _ in cols) + "|"]
@@ -493,7 +507,9 @@ def _md_table(df: pd.DataFrame) -> str:
 TABLE_TITLES = {
     "main": "Main comparison: full model vs baselines and trivial controls (test events, mean ± sd over seeds)",
     "ablation": "Ablation: variants with paired deltas vs full (same data realisation per seed)",
-    "curvature_delta": "Curvature-removal delta: full minus no_curvature (book test iii)",
+    "curvature_delta": ("Curvature-removal delta: full minus no_curvature (book test iii). Verdict rule: outside seed "
+                        "noise when every per-seed delta has the same sign and |mean delta| exceeds the larger "
+                        "seed sd of the two arms; compare with the chance level"),
     "obviousness": "Recall vs obviousness: full model per injection level (S4.5)",
     "learned_vs_fixed": "Learned combiner (L13) vs calibrated fixed weights",
     "components": "Which component carries the signal (full model: weight, standalone test metrics, top-100 w*z)",
