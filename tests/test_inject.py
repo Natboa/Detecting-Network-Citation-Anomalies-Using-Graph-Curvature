@@ -287,3 +287,71 @@ def test_clique_drop_prob_and_seed(base):
     assert kept - n_existing <= len(dropped.truth_event_ids) <= kept
     again = inject_clique(base["events"], base["works"], 2, 12, seed=3, t_min=T_MIN)
     pd.testing.assert_frame_equal(again.events, full.events)
+
+
+# ---------------------------------------------------------------- age-matched variant
+# Spec: inject_cartel(age_matched=True) keeps donors in the window (so every injected event has
+# t >= t_min) and draws recipients among older papers of the same field so that cited ages follow
+# the field's natural cited-age distribution (events with t < window start); edges donor -> recipient
+# only; time consistency, field, unlabeled, disjoint authors, fresh ids and determinism still hold.
+
+
+@pytest.fixture(scope="module")
+def age_run(base):
+    return run(base, authorships=base["authorships"], age_matched=True, **OBVIOUSNESS["moderate"])
+
+
+def _cited_ages(res, events, works):
+    pub = pub_days(works)
+    new = new_rows(res, events)
+    return new["t"].to_numpy() - new["dst_id"].map(pub).to_numpy()
+
+
+def test_age_matched_cited_ages_follow_the_natural_distribution(base, age_run):
+    from scipy.stats import ks_2samp
+
+    ev, works = base["events"], base["works"]
+    pub = pub_days(works)
+    nat = ev[ev["t"] < T_MIN]
+    nat_age = nat["t"].to_numpy() - nat["dst_id"].map(pub).to_numpy()
+    plain = run(base, authorships=base["authorships"], **OBVIOUSNESS["moderate"])
+    ks_plain = ks_2samp(_cited_ages(plain, ev, works), nat_age).statistic
+    ks_age = ks_2samp(_cited_ages(age_run, ev, works), nat_age).statistic
+    # measured on this stream: about 0.49 (default) vs 0.23 (age-matched); bound 0.30 for the variant
+    assert len(new_rows(age_run, ev)) >= 40
+    assert ks_age < 0.30 and ks_age < ks_plain - 0.15
+
+
+def test_age_matched_keeps_the_injector_invariants(base, age_run):
+    ev, works = base["events"], base["works"]
+    new = new_rows(age_run, ev)
+    pub = pub_days(works)
+    # fresh ids, exactly the new rows, sorted, no duplicate pairs, existing rows unchanged
+    assert set(age_run.truth_event_ids) == set(new["event_id"])
+    assert new["event_id"].min() > ev["event_id"].max()
+    assert not age_run.events.duplicated(["src_id", "dst_id"]).any()
+    assert age_run.events[["t", "event_id"]].apply(tuple, axis=1).is_monotonic_increasing
+    pd.testing.assert_frame_equal(
+        age_run.events[age_run.events["event_id"].isin(ev["event_id"])].sort_values("event_id")
+        .reset_index(drop=True), ev.sort_values("event_id").reset_index(drop=True), check_like=True)
+    # time consistency and t_min; donors cite, recipients only receive
+    assert (new["t"] == new["src_id"].map(pub)).all()
+    assert (new["dst_id"].map(pub) < new["t"]).all()
+    assert (new["t"] >= T_MIN).all()
+    roles = age_run.cartels.set_index("work_id")["role"]
+    assert (new["src_id"].map(roles) == "donor").all() and (new["dst_id"].map(roles) == "recipient").all()
+    # one field per cartel, unlabeled members, disjoint authors, disjoint cartels
+    c = age_run.cartels
+    assert (c.groupby("cartel_id")["field"].nunique() == 1).all()
+    assert not c["work_id"].duplicated().any()
+    lab = set(works.loc[works.get("is_retracted_oa", pd.Series(False, index=works.index)).fillna(False)
+                        .astype(bool), "work_id"])
+    assert not (set(c["work_id"]) & lab)
+    a = base["authorships"]
+    for _, g in c.groupby("cartel_id"):
+        auth = a[a["work_id"].isin(g["work_id"])]
+        assert not auth.duplicated("author_id").any()
+    # deterministic under seed
+    again = run(base, authorships=base["authorships"], age_matched=True, **OBVIOUSNESS["moderate"])
+    np.testing.assert_array_equal(again.truth_event_ids, age_run.truth_event_ids)
+    pd.testing.assert_frame_equal(again.cartels, age_run.cartels)

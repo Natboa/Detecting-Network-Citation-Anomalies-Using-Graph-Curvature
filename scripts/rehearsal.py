@@ -112,7 +112,9 @@ def make_realisation(level: str, seed: int, design: dict) -> dict:
                                 t_min=t_min[period], drop_prob=design["clique"]["drop_prob"], exclude_ids=used)
         else:
             res = inject_cartel(events, w, n_cartels=n, seed=rs, t_min=t_min[period], authorships=auth,
-                                exclude_ids=used, recipient_share=design["recipient_share"], **OBVIOUSNESS[level])
+                                exclude_ids=used, recipient_share=design["recipient_share"],
+                                age_matched=bool(design.get("age_matched", False)),
+                                recipient_pool=works if design.get("age_matched") else None, **OBVIOUSNESS[level])
         events = res.events
         ids = res.truth_event_ids
         tt = events.set_index("event_id").loc[ids, "t"].to_numpy()
@@ -137,15 +139,30 @@ def make_realisation(level: str, seed: int, design: dict) -> dict:
             "seed": seed}
 
 
+def _cited_age_medians(data, full) -> dict:
+    """Median cited-paper age (days) of the scored test positives and negatives (diagnostic)."""
+    from citecurv.data.synthetic import to_days
+
+    w = data["works"]
+    pub = pd.Series(to_days(w["pub_date"].to_numpy()), index=w["work_id"].to_numpy())
+    sc = full.scores.loc[(full.split == "test").to_numpy() & ~full.scores["cold_start"].to_numpy()]
+    ev = data["events"].set_index("event_id").loc[sc["event_id"].to_numpy()]
+    age = ev["t"].to_numpy() - pub.reindex(ev["dst_id"].to_numpy()).to_numpy()
+    y = np.isin(sc["event_id"].to_numpy(), data["truth_ids"])
+    return {"positives": float(np.median(age[y])) if y.any() else None, "negatives": float(np.median(age[~y]))}
+
+
 def pipeline_inputs(data: dict) -> dict:
     return {k: data[k] for k in ("events", "works", "authorships", "embeddings", "event_labels", "cutoff")}
 
 
-def pipeline_cfg(design: dict, embed_mode=None, **pipeline) -> dict:
+def pipeline_cfg(design: dict, embed_mode=None, temporal_stat=None, **pipeline) -> dict:
     from citecurv.config import load_config
 
     cfg = load_config()
     cfg["scoring"]["components"]["embed_mode"] = embed_mode or design["embed_mode"]
+    if temporal_stat is not None:
+        cfg["scoring"]["components"]["temporal_stat"] = temporal_stat
     cfg["eval"]["split"]["val_frac"] = design["val_frac"]
     cfg["pipeline"] = {**design["pipeline"], **pipeline}
     return cfg
@@ -501,9 +518,18 @@ def main(argv=None) -> int:
     ap.add_argument("--seeds", nargs="+", type=int, default=[0, 1, 2])
     ap.add_argument("--n-works", type=int, default=DESIGN["n_works"])
     ap.add_argument("--orc-max-events", type=int, default=None)
-    ap.add_argument("--skip-pygod", action="store_true")
+    ap.add_argument("--skip-pygod", "--no-pygod", dest="skip_pygod", action="store_true")
     ap.add_argument("--pygod-python", default="/home/user/venvs/a5-pygod/bin/python")
-    ap.add_argument("--skip-tgn", action="store_true")
+    ap.add_argument("--skip-tgn", "--no-tgn", dest="skip_tgn", action="store_true")
+    ap.add_argument("--temporal-stat", default=None, choices=["rate_ratio", "poisson_tail"],
+                    help="s_temp statistic (default: the config value, rate_ratio)")
+    ap.add_argument("--age-matched", action="store_true",
+                    help="age-matched cartel injection (inject_cartel(age_matched=True); clique level unchanged)")
+    ap.add_argument("--variants", nargs="+", default=None,
+                    help="subset of eval.ablation.VARIANTS for the matrix (default: all)")
+    ap.add_argument("--light", action="store_true",
+                    help="follow-up subset: matrix + baselines only (no full_learned_train, equal-weights cells, "
+                         "sanity gates, shuffle, reproducibility rerun, diagnostics or explorer export)")
     ap.add_argument("--skip-equal-weights", action="store_true")
     ap.add_argument("--sanity-level", default="moderate")
     ap.add_argument("--pygod-child", default=None, help=argparse.SUPPRESS)
@@ -519,6 +545,8 @@ def main(argv=None) -> int:
     design = copy.deepcopy(DESIGN)
     design["n_works"] = args.n_works
     design["pipeline"]["orc_max_events"] = args.orc_max_events
+    design["age_matched"] = bool(args.age_matched)
+    design["temporal_stat"] = args.temporal_stat or "config default"
     root, results = Path(args.out_dir), Path(args.results)
     for p in (root, results):
         p.mkdir(parents=True, exist_ok=True)
@@ -527,15 +555,15 @@ def main(argv=None) -> int:
     t_wall, cpu0 = time.time(), cpu_seconds()
     summary = {"synthetic": True, "note": SYNTHETIC_NOTE, "design": design, "realisations": {}, "gates": {},
                "diagnostics": {}}
-    variants = list(VARIANTS)
+    variants = list(args.variants or VARIANTS)
     calibrated = [v for v in variants if VARIANTS[v].combiner == "calibrated"]
 
     for level in args.levels:
         for seed in args.seeds:
             log(f"{level} seed {seed}: generating")
             data = make_realisation(level, seed, design)
-            explorer_cell = level == args.sanity_level and seed == args.seeds[0]
-            cfg = pipeline_cfg(design, with_inputs=explorer_cell)
+            explorer_cell = level == args.sanity_level and seed == args.seeds[0] and not args.light
+            cfg = pipeline_cfg(design, temporal_stat=args.temporal_stat, with_inputs=explorer_cell)
             info = {"n_events": int(len(data["events"])), "cutoff_t": data["cutoff"], "injected": data["injected"]}
             kept, memos = {}, {}
             tags = {"level": level, "synthetic": True, "group": "matrix"}
@@ -543,6 +571,8 @@ def main(argv=None) -> int:
             def keep(res):
                 if res.variant in ("full", "ollivier_only"):
                     kept[res.variant] = res
+                if res.variant == "full_learned" and "full" not in variants:
+                    kept["full"] = res
                 m = res.metrics
                 log(f"  {res.variant}: AP {m['test']['ap']:.4f} AUROC {m['test']['auroc']:.4f} {res.weights_source} "
                     f"ORC computed {m['curvature'].get('n_orc_computed')}")
@@ -551,6 +581,18 @@ def main(argv=None) -> int:
             run_matrix(variants, [seed], pipeline_inputs(data), root / "matrix" / level, cfg=cfg, tags=tags,
                        callback=keep, memos=memos)
             memo = memos[seed]
+            full = kept["full"]
+            if args.light:
+                info["model_cpu_s"] = cpu_seconds() - t0
+                t0 = cpu_seconds()
+                bl = run_baselines(data, full, root, design, args, False)
+                info["baseline_cpu_s"] = cpu_seconds() - t0
+                info["model_test_n_pos_scored"] = int(full.metrics["test"].get("n_pos", -1))
+                info["dst_age_days_median"] = _cited_age_medians(data, full)
+                log("  baselines: " + ", ".join(f"{k} {v['test']['auroc']:.3f}" for k, v in bl["metrics"].items()))
+                summary["realisations"].setdefault(level, {})[str(seed)] = info
+                del data, kept, memos, memo, full, bl
+                continue
             cfg_lt = copy.deepcopy(cfg)
             cfg_lt["pipeline"]["learned_fit_split"] = "train"
             res = run_pipeline(**pipeline_inputs(data), variant="full_learned", seed=seed, cfg=cfg_lt, orc_memo=memo,

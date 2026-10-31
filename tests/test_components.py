@@ -5,7 +5,11 @@ Spec under test: docs/score_components.md (PROVISIONAL, S3.1 gate).
   earlier events' endpoint cosine in the event's reference cell.
 - s_geom: |z| of Forman against the reference cell; escalated events take
   max(|z_forman|, |z_orc|); forman_only ignores ORC; ollivier_only uses only ORC.
-- s_temp: z of x = log((n_recent+1)/(n_before+1)) + log(T_before/W) against the cell.
+- s_temp: z of x = log((n_recent+1)/(n_before+1)) + log(T_before/W) against the cell
+  (temporal_stat "rate_ratio", default); option "poisson_tail": x = -ln P(N >= n_recent),
+  N negative binomial = Gamma(a0 + n_before, b0 + T_hist)-Poisson predictive count in W days
+  (default a0 = 1, b0 = W),
+  T_hist = T_before if n_before > 0 else 0; x = 0 when n_recent = 0.
 - s_curvdyn: |asinh(observed) - predicted| / rmse_train, ridge fitted on TRAIN rows only.
 - Reference cell = (field of src, calendar year of t), fallback field -> global,
   expanding window over strictly earlier events (ts < t), min_cell rows and sd > 0.
@@ -263,7 +267,7 @@ def test_full_falls_back_to_forman_when_orc_failed():
 # ---------------------------------------------------------------- s_temp
 
 
-def _burst_scenario(burst: bool, window=90):
+def _burst_scenario(burst: bool, window=90, temporal_stat="rate_ratio"):
     rows = []
     # background: 12 papers, each cited 16 times at seeded random days in [0, 1500], field F
     rng = np.random.default_rng(1)
@@ -278,13 +282,14 @@ def _burst_scenario(burst: bool, window=90):
         rows += [(f"x{m}", "P", 600 + 100 * m) for m in range(10)]  # natural spacing
     ev = make_events(rows)
     out = score_events(ev, make_works(ev), None, window_days=window, min_cell=10,
-                       with_inputs=True)
+                       with_inputs=True, temporal_stat=temporal_stat)
     return out[out["src_id"].str.startswith("x")]
 
 
-def test_burst_of_ten_in_one_day_raises_s_temp_above_natural_spacing():
-    burst = _burst_scenario(True)
-    natural = _burst_scenario(False)
+@pytest.mark.parametrize("temporal_stat", ["rate_ratio", "poisson_tail"])
+def test_burst_of_ten_in_one_day_raises_s_temp_above_natural_spacing(temporal_stat):
+    burst = _burst_scenario(True, temporal_stat=temporal_stat)
+    natural = _burst_scenario(False, temporal_stat=temporal_stat)
     assert not burst["cold_start"].any() and not natural["cold_start"].any()
     assert burst["s_temp"].min() > natural["s_temp"].max()
     assert burst["s_temp"].min() > 2.0
@@ -304,6 +309,79 @@ def test_s_temp_new_paper_without_history():
     ev = make_events([("a", "P", 50), ("b", "P", 60), ("c", "P", 70)])
     out = score_events(ev, make_works(ev), None, window_days=30, with_inputs=True)
     assert out["in_temp_x"].tolist() == pytest.approx([0.0, math.log(2), math.log(3)])
+
+
+def _nb_tail_brute(n, n_before, hist, window, a0=1.0, b0=90.0):
+    """P(N >= n) of the Gamma-Poisson predictive by summing the negative binomial pmf by hand."""
+    r = a0 + n_before
+    q = (b0 + hist) / (b0 + hist + window)
+    pmf = [math.gamma(k + r) / (math.gamma(r) * math.factorial(k)) * q ** r * (1 - q) ** k for k in range(n)]
+    return 1.0 - sum(pmf)
+
+
+def test_poisson_tail_new_paper_without_history_hand_computed():
+    # n_before = 0 -> prior only (a0 = 1, b0 = W): r = 1, q = 1/2, geometric: P(N >= n) = 2^-n
+    ev = make_events([("a", "P", 50), ("b", "P", 60), ("c", "P", 70)])
+    out = score_events(ev, make_works(ev), None, window_days=30, with_inputs=True,
+                       temporal_stat="poisson_tail")
+    step = math.log(2)
+    assert out["in_temp_x"].tolist() == pytest.approx([0.0, step, 2 * step])
+
+
+def test_poisson_tail_burst_hand_computed():
+    burst = _burst_scenario(True, temporal_stat="poisson_tail")
+    row = burst.iloc[0]
+    assert row["in_n_recent"] == 9 and row["in_n_before"] == 6 and row["in_exposure_days"] == 910
+    # r = 7, q = (90 + 910) / (90 + 910 + 90)
+    assert row["in_temp_x"] == pytest.approx(-math.log(_nb_tail_brute(9, 6, 910, 90)), rel=1e-9)
+    assert row["in_temp_x"] > 10  # nine same-day citations against about one per 150 days
+
+
+def test_poisson_tail_prior_parameters_and_validation():
+    ev = make_events([("a", "P", 50), ("b", "P", 60)])
+    out = score_events(ev, make_works(ev), None, window_days=30, with_inputs=True,
+                       temporal_stat="poisson_tail", temporal_prior_count=2.0, temporal_prior_days=100.0)
+    # r = 2, q = 100 / 130: P(N >= 1) = 1 - q^2
+    assert out["in_temp_x"].iloc[1] == pytest.approx(-math.log(1 - (100 / 130) ** 2))
+    with pytest.raises(ValueError):
+        score_events(ev, make_works(ev), None, temporal_stat="gap")
+    with pytest.raises(ValueError):
+        score_events(ev, make_works(ev), None, temporal_stat="poisson_tail", temporal_prior_count=0)
+
+
+def _constant_rate_stream(seed=3):
+    """Papers cited by homogeneous Poisson processes (rates 1/30, 1/90, 1/365 per day), published at
+    days 0 .. 3000, observed until day 6000: no burst anywhere."""
+    rng = np.random.default_rng(seed)
+    rows = []
+    for j in range(150):
+        rate = (1 / 30, 1 / 90, 1 / 365)[j % 3]
+        start = int(rng.integers(0, 3001))
+        n = rng.poisson(rate * (6000 - start))
+        for m, day in enumerate(np.sort(rng.integers(start, 6001, n))):
+            rows.append((f"c{j}_{m}", f"P{j}", int(day)))
+    rows.sort(key=lambda r: r[2])
+    return make_events(rows)
+
+
+def test_poisson_tail_constant_rate_gives_near_zero_mean_surprise_at_every_age():
+    ev = _constant_rate_stream()
+    works = make_works(ev)
+    tail = score_events(ev, works, None, window_days=90, with_inputs=True, temporal_stat="poisson_tail")
+    ratio = score_events(ev, works, None, window_days=90, with_inputs=True)
+    hist = (tail["in_n_prior_dst"] >= 3).to_numpy()  # past cold start
+    rate = tail["dst_id"].map(lambda d: int(d[1:]) % 3).to_numpy()  # 0: 1/30, 1: 1/90, 2: 1/365 per day
+    x_tail, x_ratio = tail["in_temp_x"].to_numpy(), ratio["in_temp_x"].to_numpy()
+    # -ln of a tail p-value under the null: E <= 1 (E[-ln U] = 1), near 0 for rarely cited papers
+    assert (x_tail >= 0).all() and x_tail[hist].mean() < 1.0
+    rare = hist & (rate == 2)
+    assert x_tail[rare].mean() < 0.5
+    # no drift with history length on the rarely cited papers; the rate ratio drifts upward with age
+    old, young = rare & (tail["in_exposure_days"].to_numpy() > 1500), rare & (tail["in_exposure_days"].to_numpy() <= 1500)
+    assert old.sum() > 100 and young.sum() > 50
+    assert abs(x_tail[old].mean() - x_tail[young].mean()) < 0.15
+    assert x_ratio[old].mean() - x_ratio[young].mean() > 0.3
+    assert x_ratio[rare].mean() > 2 * x_tail[rare].mean()
 
 
 # ---------------------------------------------------------------- s_embed
@@ -491,12 +569,15 @@ def test_matched_random_escalation_per_stratum_ignores_other_strata():
 # ---------------------------------------------------------------- agreement + brute force
 
 
-@pytest.mark.parametrize("variant", ["full", "forman_only", "ollivier_only", "no_curvature"])
+@pytest.mark.parametrize("variant,temporal_stat", [("full", "rate_ratio"), ("forman_only", "rate_ratio"),
+                                                   ("ollivier_only", "rate_ratio"), ("no_curvature", "rate_ratio"),
+                                                   ("full", "poisson_tail"), ("no_curvature", "poisson_tail")])
 @pytest.mark.parametrize("mode", ["static_cosine", "tgn"])
-def test_single_event_path_agrees_with_vectorised(variant, mode):
+def test_single_event_path_agrees_with_vectorised(variant, mode, temporal_stat):
     ev, works, curv, emb, tgn_scores, tgn_emb, train = random_stream(n=300)
     kw = dict(embeddings=emb, tgn_scores=tgn_scores, tgn_embeddings=tgn_emb, train_mask=train,
-              mode=mode, variant=variant, k=3, window_days=60, min_cell=5, pca_dim=4)
+              mode=mode, variant=variant, k=3, window_days=60, min_cell=5, pca_dim=4,
+              temporal_stat=temporal_stat)
     vec = score_events(ev, works, curv, with_inputs=True, **kw).set_index("event_id")
     ctx = build_context(ev, works, curv, **kw)
     for eid in ev["event_id"]:

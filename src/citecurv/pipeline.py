@@ -186,6 +186,10 @@ def resolve_config(cfg=None, *, variant="full", seed=0) -> dict:
                 "curvdyn_ridge_alpha": float(pick(comp.get("curvdyn_ridge_alpha"), 1.0)),
                 "curvdyn_max_fit_rows": int(pick(comp.get("curvdyn_max_fit_rows"), 500_000)),
                 "p_link_eps": float(pick(comp.get("p_link_eps"), 1e-7)),
+                "temporal_stat": str(pick(comp.get("temporal_stat"), "rate_ratio")),
+                "temporal_prior_count": float(pick(comp.get("temporal_prior_count"), 1.0)),
+                "temporal_prior_days": (None if comp.get("temporal_prior_days") is None
+                                        else float(comp["temporal_prior_days"])),
             },
         },
         "eval": {"top_k": [int(k) for k in pick(ev.get("top_k"), [100, 1000])]},
@@ -446,7 +450,8 @@ def run_pipeline(events, works, *, authorships=None, embeddings=None, event_labe
         k=rcfg["scoring"]["cold_start_k"], window_days=cc["window_days"], min_cell=cc["min_cell"],
         pca_dim=cc["curvdyn_pca_dim"], ridge_alpha=cc["curvdyn_ridge_alpha"],
         max_fit_rows=cc["curvdyn_max_fit_rows"], p_link_eps=cc["p_link_eps"], seed=seed,
-        with_inputs=bool(pipe["with_inputs"]))
+        with_inputs=bool(pipe["with_inputs"]), temporal_stat=cc["temporal_stat"],
+        temporal_prior_count=cc["temporal_prior_count"], temporal_prior_days=cc["temporal_prior_days"])
     if not np.array_equal(comp["event_id"].to_numpy(), ev["event_id"].to_numpy()):
         raise RuntimeError("score_events returned rows out of canonical order")
     disabled = list(comp.attrs.get("disabled_components", []))

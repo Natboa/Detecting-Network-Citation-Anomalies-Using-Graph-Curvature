@@ -89,6 +89,9 @@ scoring:
     curvdyn_ridge_alpha: 1.0     # ridge penalty on standardised features
     curvdyn_max_fit_rows: 500000 # seeded cap on train rows for the s_curvdyn fit
     p_link_eps: 1.0e-7           # clip p_link before -ln
+    temporal_stat: rate_ratio    # s_temp statistic: rate_ratio (D6) | poisson_tail (-ln P(N >= n_recent), Gamma-Poisson; rehearsal follow-up option, Maor decides)
+    temporal_prior_count: 1.0    # poisson_tail only: Gamma prior shape a0 (pseudo-citations)
+    temporal_prior_days: null    # poisson_tail only: Gamma prior exposure b0 in days; null = window_days
 
 eval:
   cutoff_date: null              # set in S4.1

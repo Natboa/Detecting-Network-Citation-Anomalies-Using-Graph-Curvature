@@ -209,6 +209,24 @@ def test_no_temporal_flag_keeps_s_temp_when_off(fx):
     np.testing.assert_array_equal(off.scores["total"].to_numpy(), full.scores["total"].to_numpy())
 
 
+def test_temporal_stat_config_reaches_the_components(fx):
+    from citecurv.scoring.components import score_events
+
+    base = run(fx)
+    assert base.config["scoring"]["components"]["temporal_stat"] == "rate_ratio"  # default unchanged
+    cfg = cfg_small()
+    cfg["scoring"]["components"]["temporal_stat"] = "poisson_tail"
+    tail = run(fx, cfg=cfg)
+    assert tail.config["scoring"]["components"]["temporal_stat"] == "poisson_tail"
+    assert tail.config_hash != base.config_hash
+    direct = score_events(fx["events"], fx["works"], None, embeddings=fx["embeddings"], min_cell=5,
+                          temporal_stat="poisson_tail", variant="no_curvature")
+    np.testing.assert_allclose(tail.components["s_temp"].to_numpy(), direct["s_temp"].to_numpy(),
+                               rtol=1e-12, atol=1e-12, equal_nan=True)
+    assert not np.allclose(tail.components["s_temp"].to_numpy(), base.components["s_temp"].to_numpy(),
+                           equal_nan=True)
+
+
 def test_tgn_outputs_reach_full_but_not_no_temporal(fx):
     ev = fx["events"]
     p = np.linspace(0.05, 0.95, len(ev))

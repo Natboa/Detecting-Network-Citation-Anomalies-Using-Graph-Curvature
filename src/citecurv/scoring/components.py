@@ -14,7 +14,10 @@ Components (raw values; higher = more anomalous; the combiner z-normalises them)
             reference being earlier escalated events of the cell.
 - s_temp    z of x = log((n_recent + 1) / (n_before + 1)) + log(T_before / W)
             against the reference cell: the cited paper's citation rate in the
-            trailing W days relative to its own earlier rate.
+            trailing W days relative to its own earlier rate (temporal_stat
+            "rate_ratio", the default). Option temporal_stat="poisson_tail":
+            x = -ln P(N >= n_recent), N the Gamma-Poisson predictive count in W
+            days given the paper's own history (see _temporal_stat).
 - s_curvdyn |asinh(observed curvature) - predicted| / rmse_train, a ridge
             regressor on PCA-reduced endpoint representations fitted on TRAIN
             rows only.
@@ -50,6 +53,8 @@ COMPONENTS = ("s_embed", "s_geom", "s_temp", "s_curvdyn")
 COMPONENT_COLUMNS = ["event_id", "src_id", "dst_id", "t", *COMPONENTS, "cold_start"]
 VARIANTS = ("full", "no_curvature", "forman_only", "ollivier_only", "no_temporal")
 EMBED_MODES = ("auto", "tgn", "static_cosine")
+TEMPORAL_STATS = ("rate_ratio", "poisson_tail")
+_TAIL_FLOOR = 1e-300  # P(N >= n) floor before -ln (caps the poisson_tail surprise at about 690.8)
 LEVELS = ("field_year", "field", "global")  # index stored in *_level columns; -1 = none
 UNKNOWN_FIELD = "unknown"
 
@@ -236,12 +241,56 @@ def _canonical_events(events, works, curvature, field_col):
 # ----------------------------------------------------------------- raw statistics
 
 
-def _temporal_raw(dst, t, window):
+def _temporal_stat(n_recent, n_before, exposure, window, stat="rate_ratio", prior_count=1.0,
+                   prior_days=None):
+    """The s_temp raw statistic x from the cited paper's counts (arrays or scalars; returns float64).
+
+    stat "rate_ratio" (D6, default): x = ln((n_recent + 1) / (n_before + 1)) + ln(T_before / W).
+
+    stat "poisson_tail": x = -ln P(N >= n_recent), where N is the number of citations the paper would
+    receive in W days at its own earlier rate. The rate is uncertain for papers with little history, so
+    it gets a Gamma prior with shape a0 = prior_count (pseudo-citations) and rate b0 = prior_days
+    (pseudo-exposure in days, None = W; default: one pseudo-citation in one pseudo-window, prior mean
+    one citation per W days, so a paper without history pays ln 2 per recent citation). The history
+    is the n_before citations over T_hist = T_before days (T_hist = 0 when n_before = 0: no history,
+    prior only). The posterior is Gamma(a0 + n_before, b0 + T_hist) and the predictive count in W days
+    is negative binomial with r = a0 + n_before and success probability q = (b0 + T_hist) /
+    (b0 + T_hist + W); P(N >= n) = I_{1-q}(n, r) (regularised incomplete beta) for n >= 1 and 1 for
+    n = 0. With long history it tends to the Poisson(n_before / T_hist * W) tail. P is floored at
+    1e-300 before the log. Under a constant citation rate the tail probability of the observed count
+    is (super-)uniform once the history pins the rate, so E[x] <= 1 at every age (it is E[-ln U] = 1 for
+    a continuous variable and smaller for a discrete count: near 0 for rarely cited papers, whose
+    n_recent is mostly 0, and approaching 1 for frequently cited ones; x is not centred, the reference
+    cell z-score centres it). With little history the prior dominates and a young paper's first
+    citations count as surprising. The rate ratio instead drifts upward with ln(T_before / W) for rarely
+    cited old papers (docs/rehearsal_report.md section 5).
+
+    Leak: the inputs are the counts of _temporal_raw (ts <= t, own row removed, same-day siblings in
+    n_recent, history ts <= t - W < t); the prior is a constant. No label and no later event enters."""
+    nr = np.asarray(n_recent, dtype=np.float64)
+    nb = np.asarray(n_before, dtype=np.float64)
+    ex = np.asarray(exposure, dtype=np.float64)
+    if stat == "rate_ratio":
+        return np.log((nr + 1) / (nb + 1)) + np.log(ex / window)
+    if stat != "poisson_tail":
+        raise ValueError(f"temporal_stat must be one of {TEMPORAL_STATS}, got {stat!r}")
+    from scipy.special import betainc
+
+    b0 = float(window if prior_days is None else prior_days)
+    hist = np.where(nb > 0, ex, 0.0)
+    r = float(prior_count) + nb
+    q = (b0 + hist) / (b0 + hist + window)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        tail = np.where(nr > 0, betainc(np.maximum(nr, 1.0), r, 1.0 - q), 1.0)
+    return -np.log(np.clip(tail, _TAIL_FLOOR, 1.0))
+
+
+def _temporal_raw(dst, t, window, stat="rate_ratio", prior_count=1.0, prior_days=None):
     """Per event, over events citing the same dst (vectorised, O(E log E)):
     n_prior = #(ts < t)                      (cold-start count)
     n_recent = #(t - W < ts <= t) - 1        (same-day siblings count, self does not)
     n_before = #(ts <= t - W), T_before = max(t - W - first ts, W) if n_before else W
-    x = log((n_recent + 1) / (n_before + 1)) + log(T_before / W)
+    x = _temporal_stat(n_recent, n_before, T_before, W, stat, ...)  (rate ratio by default)
     Leak: only events of dst with ts <= t enter, and the event's own row is removed."""
     codes, uniq = pd.factorize(dst)
     codes = codes.astype(np.int64)
@@ -260,7 +309,7 @@ def _temporal_raw(dst, t, window):
     n_recent = n_le - 1 - n_before
     t_first = st[g0]
     exposure = np.where(n_before > 0, np.maximum(t - window - t_first, window), window).astype(float)
-    x = np.log((n_recent + 1) / (n_before + 1)) + np.log(exposure / window)
+    x = _temporal_stat(n_recent, n_before, exposure, window, stat, prior_count, prior_days)
     return {"n_prior_dst": n_lt, "n_recent": n_recent, "n_before": n_before,
             "exposure_days": exposure, "temp_x": x}
 
@@ -502,7 +551,14 @@ class _Prepared:
 
 def _prepare(events, works, curvature, *, embeddings, tgn_scores, tgn_embeddings, train_mask,
              mode, variant, k, window_days, min_cell, curvdyn_model, pca_dim, ridge_alpha,
-             max_fit_rows, p_link_eps, seed, field_col):
+             max_fit_rows, p_link_eps, seed, field_col, temporal_stat="rate_ratio",
+             temporal_prior_count=1.0, temporal_prior_days=None):
+    if temporal_stat not in TEMPORAL_STATS:
+        raise ValueError(f"temporal_stat must be one of {TEMPORAL_STATS}, got {temporal_stat!r}")
+    if temporal_prior_days is None:
+        temporal_prior_days = float(window_days)
+    if float(temporal_prior_count) <= 0 or float(temporal_prior_days) < 0:
+        raise ValueError("temporal_prior_count must be > 0 and temporal_prior_days >= 0")
     if variant not in VARIANTS:
         raise ValueError(f"variant must be one of {VARIANTS}, got {variant!r}")
     if mode not in EMBED_MODES:
@@ -538,7 +594,8 @@ def _prepare(events, works, curvature, *, embeddings, tgn_scores, tgn_embeddings
     emb = _EmbTable(embeddings) if embeddings is not None else None
     cosine = (_cosine_rows(emb, ev["src_id"].to_numpy(), ev["dst_id"].to_numpy())
               if emb is not None else np.full(n, np.nan))
-    temporal = (_temporal_raw(ev["dst_id"].to_numpy(), ev["t"].to_numpy(), int(window_days)) if n else
+    temporal = (_temporal_raw(ev["dst_id"].to_numpy(), ev["t"].to_numpy(), int(window_days), temporal_stat,
+                              float(temporal_prior_count), float(temporal_prior_days)) if n else
                 {key: np.zeros(0) for key in ("n_prior_dst", "n_recent", "n_before", "exposure_days", "temp_x")})
 
     disabled = ("s_geom", "s_curvdyn") if variant == "no_curvature" else ()
@@ -563,7 +620,9 @@ def _prepare(events, works, curvature, *, embeddings, tgn_scores, tgn_embeddings
     params = {"k": int(k), "window_days": int(window_days), "min_cell": int(min_cell),
               "pca_dim": int(pca_dim), "ridge_alpha": float(ridge_alpha),
               "max_fit_rows": int(max_fit_rows), "p_link_eps": float(p_link_eps), "seed": int(seed),
-              "field_col": field_col}
+              "field_col": field_col, "temporal_stat": temporal_stat,
+              "temporal_prior_count": float(temporal_prior_count),
+              "temporal_prior_days": float(temporal_prior_days)}
     return _Prepared(ev, variant, resolved, params, p_link, emb, cosine, temporal, endpoints, model,
                      disabled, notes)
 
@@ -580,7 +639,8 @@ def _uses(variant):
 def score_events(events, works, curvature, *, embeddings=None, tgn_scores=None, tgn_embeddings=None,
                  train_mask=None, mode="auto", variant="full", k=3, window_days=90, min_cell=30,
                  curvdyn_model=None, pca_dim=32, ridge_alpha=1.0, max_fit_rows=500_000,
-                 p_link_eps=1e-7, seed=0, field_col="field", with_inputs=False) -> pd.DataFrame:
+                 p_link_eps=1e-7, seed=0, field_col="field", with_inputs=False, temporal_stat="rate_ratio",
+                 temporal_prior_count=1.0, temporal_prior_days=None) -> pd.DataFrame:
     """Raw components for every event (the `components` contract frame).
 
     events: event_id, src_id, dst_id, t. works: work_id + field (or concepts).
@@ -592,6 +652,9 @@ def score_events(events, works, curvature, *, embeddings=None, tgn_scores=None, 
     mode: s_embed source ("auto" = tgn if tgn_scores else static_cosine).
     variant: ablation cell (docs/score_components.md section 7); disabled
     components are all-NaN and listed in attrs["disabled_components"].
+    temporal_stat: s_temp raw statistic, "rate_ratio" (D6, default) or
+    "poisson_tail" with a Gamma(temporal_prior_count, temporal_prior_days)
+    prior on the cited paper's rate (_temporal_stat).
 
     Returns rows in canonical order (t, event_id) with COMPONENT_COLUMNS; with
     with_inputs=True also the in_* trace columns (NFR10). Cold-start rows carry
@@ -605,7 +668,8 @@ def score_events(events, works, curvature, *, embeddings=None, tgn_scores=None, 
                  tgn_embeddings=tgn_embeddings, train_mask=train_mask, mode=mode, variant=variant,
                  k=k, window_days=window_days, min_cell=min_cell, curvdyn_model=curvdyn_model,
                  pca_dim=pca_dim, ridge_alpha=ridge_alpha, max_fit_rows=max_fit_rows,
-                 p_link_eps=p_link_eps, seed=seed, field_col=field_col)
+                 p_link_eps=p_link_eps, seed=seed, field_col=field_col, temporal_stat=temporal_stat,
+                 temporal_prior_count=temporal_prior_count, temporal_prior_days=temporal_prior_days)
     ev, n = P.ev, len(P.ev)
     t = ev["t"].to_numpy()
     frames = _level_frames(ev)
@@ -766,13 +830,15 @@ class ScoringContext:
 def build_context(events, works, curvature, *, embeddings=None, tgn_scores=None, tgn_embeddings=None,
                   train_mask=None, mode="auto", variant="full", k=3, window_days=90, min_cell=30,
                   curvdyn_model=None, pca_dim=32, ridge_alpha=1.0, max_fit_rows=500_000,
-                  p_link_eps=1e-7, seed=0, field_col="field") -> ScoringContext:
+                  p_link_eps=1e-7, seed=0, field_col="field", temporal_stat="rate_ratio",
+                  temporal_prior_count=1.0, temporal_prior_days=None) -> ScoringContext:
     """Same inputs and meaning as score_events; returns the state for score_event."""
     P = _prepare(events, works, curvature, embeddings=embeddings, tgn_scores=tgn_scores,
                  tgn_embeddings=tgn_embeddings, train_mask=train_mask, mode=mode, variant=variant,
                  k=k, window_days=window_days, min_cell=min_cell, curvdyn_model=curvdyn_model,
                  pca_dim=pca_dim, ridge_alpha=ridge_alpha, max_fit_rows=max_fit_rows,
-                 p_link_eps=p_link_eps, seed=seed, field_col=field_col)
+                 p_link_eps=p_link_eps, seed=seed, field_col=field_col, temporal_stat=temporal_stat,
+                 temporal_prior_count=temporal_prior_count, temporal_prior_days=temporal_prior_days)
     ev = P.ev
     t = ev["t"].to_numpy()
     frames = _level_frames(ev)
@@ -818,7 +884,8 @@ def score_event(event_id, ctx: ScoringContext) -> ScoreBreakdown:
     n_before = int(np.searchsorted(times, t - W, "right"))
     n_recent = n_le - 1 - n_before
     exposure = float(max(t - W - int(times[0]), W)) if n_before else float(W)
-    temp_x = math.log((n_recent + 1) / (n_before + 1)) + math.log(exposure / W)
+    temp_x = float(_temporal_stat(n_recent, n_before, exposure, W, prm["temporal_stat"],
+                                  prm["temporal_prior_count"], prm["temporal_prior_days"]))
     rt = _scalar_z(ctx.tables["temp"], keys, t, temp_x, prm["min_cell"])
 
     # s_embed

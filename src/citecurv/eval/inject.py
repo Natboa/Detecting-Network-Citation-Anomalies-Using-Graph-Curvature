@@ -47,6 +47,24 @@ Design decisions (shared by both injectors):
    returned frame is re-sorted by (t, event_id), so inside one timestamp the injected rows
    come after the natural ones.
 
+5. Age-matched variant (inject_cartel(age_matched=True)). In the default construction both ends
+   of every cartel edge lie in the cartel window, so the cited paper is at most window_days old
+   and cited-paper age alone separates the cartel (docs/rehearsal_report.md section 5). With
+   age_matched=True the cartel is split into a citing core and a cited set. The donors are drawn
+   in the window as before (they make every injected citation, so t >= w0 >= t_min still holds).
+   The recipients are drawn from older papers of the same field: for each recipient an age a is
+   drawn from the field's natural cited-age distribution (t - pub date of dst over the events of
+   `events` with t < w0 whose citing paper is in the field; all fields when the field has fewer
+   than 30 such events), and the unused eligible paper whose publication day is closest to
+   (mean donor publication day - a) is taken (same eligibility and author-disjointness rules,
+   but no t_min: recipients may predate t_min; they only receive). Edges: every donor -> recipient
+   pair with pub(recipient) < pub(donor) becomes an edge with probability internal_density.
+   Donor -> donor edges are not planted (their cited age is bounded by window_days, the signal the
+   variant removes) and recipients make no citations (a citation made by an old recipient would
+   precede t_min), so `reciprocity` is ignored: the group is a pure one-way donation flow, the
+   reciprocity = 0 end of the CIDRE pattern. The distribution is measured on the events passed in;
+   pass the pre-injection stream to keep earlier injections out of it. No labels are read.
+
 Leak argument (NFR3). The injector only uses publication dates already present in `works`
 and draws no information from events later than an injected event's t: each injected
 event is attached to its source paper's own publication date, like the paper's natural
@@ -171,6 +189,61 @@ def _pick_members(rng, cand, size, window_days, author_sets, t_last):
     return None
 
 
+def _natural_ages(events, works):
+    """(t, citing field, cited age in days) of the given events with a dated cited paper, sorted by t."""
+    pub = pd.Series(_pub_days(works).to_numpy(), index=works["work_id"].astype(str).to_numpy())
+    fld = works["field"] if "field" in works else works["concepts"].map(_first_concept)
+    fld = pd.Series(fld.to_numpy(), index=works["work_id"].astype(str).to_numpy())
+    t = events["t"].to_numpy(np.int64)
+    age = t - pub.reindex(events["dst_id"].astype(str).to_numpy()).to_numpy()
+    keep = np.isfinite(age) & (age > 0)
+    out = pd.DataFrame({"t": t[keep], "field": fld.reindex(events["src_id"].astype(str).to_numpy()).to_numpy()[keep],
+                        "age": age[keep]})
+    return out.sort_values("t", kind="stable").reset_index(drop=True)
+
+
+def _field_ages(nat, f, w0, min_events=30):
+    """Natural cited ages of field f from events with t < w0 (all fields when fewer than min_events)."""
+    before = nat[nat["t"] < w0]
+    ages = before.loc[before["field"] == f, "age"].to_numpy()
+    if len(ages) < min_events:
+        ages = before["age"].to_numpy()
+    if not len(ages):
+        raise ValueError(f"age_matched: no natural citation before window start {w0}")
+    return ages
+
+
+def _pick_recipients(rng, cand, n, anchor, ages, author_sets, seen):
+    """n recipients from cand (one field): for each, draw an age from `ages` and take the unused,
+    author-disjoint paper whose pub day is closest to anchor - age. Returns (ids, pub days)."""
+    cand = cand.sort_values(["t", "work_id"], kind="stable")
+    t, ids = cand["t"].to_numpy(), cand["work_id"].to_numpy()
+    taken = np.zeros(len(t), dtype=bool)
+    seen = set(seen)
+    out_id, out_t = [], []
+    for a in rng.choice(ages, size=n):
+        pos = int(np.searchsorted(t, anchor - a))
+        lo, hi = pos - 1, pos
+        while lo >= 0 or hi < len(t):  # walk outward from the target day
+            if hi >= len(t) or (lo >= 0 and (anchor - a) - t[lo] <= t[hi] - (anchor - a)):
+                k, lo = lo, lo - 1
+            else:
+                k, hi = hi, hi + 1
+            if taken[k]:
+                continue
+            authors = author_sets.get(ids[k], frozenset()) if author_sets is not None else frozenset()
+            if authors & seen:
+                continue
+            taken[k] = True
+            seen |= authors
+            out_id.append(ids[k])
+            out_t.append(int(t[k]))
+            break
+        else:
+            raise ValueError("age_matched: not enough eligible older papers for the recipients")
+    return np.array(out_id, dtype=object), np.array(out_t, dtype=np.int64)
+
+
 def _feasible_pairs(t):
     """Ordered member pairs (a, b), a published strictly after b: a may cite b."""
     a, b = np.nonzero(t[:, None] > t[None, :])
@@ -200,7 +273,8 @@ def _append(events, src, dst, t):
 
 def inject_cartel(events, works, n_cartels, size_range=(8, 25), reciprocity=0.7,
                   internal_density=0.5, window_days=365, seed=0, t_min=None, field=None,
-                  authorships=None, *, recipient_share=0.4, exclude_ids=None) -> InjectionResult:
+                  authorships=None, *, recipient_share=0.4, exclude_ids=None,
+                  age_matched=False, recipient_pool=None) -> InjectionResult:
     """Plant n_cartels citation cartels on the CIDRE donor/recipient pattern.
 
     events: CONTRACTS.md events frame (event_id, src_id, dst_id, t [, extra columns]).
@@ -213,6 +287,10 @@ def inject_cartel(events, works, n_cartels, size_range=(8, 25), reciprocity=0.7,
     field: restrict every cartel to this field (default: a random field with a valid window).
     authorships: optional (work_id, author_id); members then have disjoint author sets.
     recipient_share: share of members given the recipient role.
+    age_matched: draw recipients among older papers so that cited ages follow the field's natural
+        cited-age distribution (module docstring 5); reciprocity is then ignored.
+    recipient_pool: works frame the age-matched recipients are drawn from (default: works); lets a
+        caller restrict donors to one period's works while recipients come from the whole stream.
     Returns InjectionResult(events, truth_event_ids, cartels); see the module docstring for
     time consistency, id assignment and the leak argument. Raises ValueError when a cartel
     cannot be placed.
@@ -228,28 +306,54 @@ def inject_cartel(events, works, n_cartels, size_range=(8, 25), reciprocity=0.7,
     rng = np.random.default_rng(seed)
     info = _eligible_works(works, t_min, exclude_ids)
     t_last = _pub_days(works).max()  # last observed publication day
-    a_sets = _author_sets(authorships, info["work_id"])
+    old = (_eligible_works(works if recipient_pool is None else recipient_pool, None, exclude_ids)
+           if age_matched else None)
+    a_sets = _author_sets(authorships, pd.concat([info["work_id"], old["work_id"]]) if age_matched
+                          else info["work_id"])
+    nat = _natural_ages(events, works if recipient_pool is None else recipient_pool) if age_matched else None
     fields = [field] if field is not None else sorted(info["field"].unique())
     used: set = set()
     src_all, dst_all, t_all, rows = [], [], [], []
 
     for c in range(n_cartels):
         size = int(rng.integers(lo, hi + 1))
+        n_rec = min(max(int(round(recipient_share * size)), 1), size - 1)
         placed = None
         for f in rng.permutation(np.array(fields, dtype=object)):
             cand = info[(info["field"] == f) & ~info["work_id"].isin(used)]
-            placed = _pick_members(rng, cand, size, window_days, a_sets, t_last)
+            placed = _pick_members(rng, cand, size - n_rec if age_matched else size, window_days, a_sets, t_last)
             if placed is not None:
                 break
         if placed is None:
-            raise ValueError(f"cartel {c}: no window of {window_days} days holds {size} eligible "
+            raise ValueError(f"cartel {c}: no window of {window_days} days holds {size} eligible "  # donors only when age_matched
                              f"papers of one field (t_min={t_min}, field={field})")
         w0, members = placed
+        if age_matched:
+            donors = members  # the citing core; the recipients are drawn below
+            mem = info[info["work_id"].isin(donors)]
+            ids, t = mem["work_id"].to_numpy(), mem["t"].to_numpy()
+            used.update(donors)
+            rec_ids, rec_t = _pick_recipients(rng, old[(old["field"] == f) & ~old["work_id"].isin(used)],
+                                              n_rec, float(t.mean()), _field_ages(nat, f, w0), a_sets,
+                                              set().union(*[a_sets.get(d, frozenset()) for d in donors])
+                                              if a_sets is not None else set())
+            used.update(rec_ids)
+            existing = _existing_pairs(events, list(ids) + list(rec_ids))
+            for i in range(len(ids)):
+                ok = rec_t < t[i]
+                hit = ok & (rng.random(len(rec_ids)) < internal_density)
+                for j in np.flatnonzero(hit):
+                    if (ids[i], rec_ids[j]) not in existing:
+                        src_all.append(ids[i])
+                        dst_all.append(rec_ids[j])
+                        t_all.append(t[i])
+            rows.extend((c, w, "donor", f, w0, w0 + window_days) for w in ids)
+            rows.extend((c, w, "recipient", f, w0, w0 + window_days) for w in rec_ids)
+            continue
         used.update(members)
         mem = info[info["work_id"].isin(members)]  # keeps (t, work_id) order
         ids, t = mem["work_id"].to_numpy(), mem["t"].to_numpy()
 
-        n_rec = min(max(int(round(recipient_share * size)), 1), size - 1)
         recipient = np.zeros(size, dtype=bool)
         recipient[rng.choice(size, size=n_rec, replace=False)] = True
 
