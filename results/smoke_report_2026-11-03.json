@@ -1,0 +1,315 @@
+{
+  "task": "S0.5",
+  "started_utc": "2026-11-03T17:48:30+00:00",
+  "tag": "v0.2.0",
+  "python": "3.12.13",
+  "python_path": "3.12",
+  "platform": "Linux-6.6.159+-x86_64-with-glibc2.35",
+  "in_colab": true,
+  "colab_release_tag": "release-colab-external-images_20260715-060047_RC00",
+  "pins": {
+    "A": [
+      "GraphRicciCurvature==0.6.1",
+      "POT==0.9.6",
+      "networkit==11.2.1",
+      "scipy<=1.13.1",
+      "networkx"
+    ],
+    "A_py313_deps": [
+      "POT==0.9.6",
+      "networkit==11.2.1",
+      "networkx",
+      "python-louvain",
+      "cython",
+      "packaging"
+    ],
+    "A_py313_nodeps": [
+      "GraphRicciCurvature==0.6.1"
+    ],
+    "C": [
+      "adapters==1.3.0",
+      "transformers==4.57.6"
+    ],
+    "D": [
+      "pygod==1.1.0",
+      "torch_geometric==2.6.1"
+    ]
+  },
+  "install": {
+    "citecurv": {
+      "cmd": "pip install citecurv @ git+https://github.com/Natboa/Detecting-Network-Citation-Anomalies-Using-Graph-Curvature@v0.2.0",
+      "ok": true,
+      "log_tail": ""
+    },
+    "A": {
+      "cmd": "pip install GraphRicciCurvature==0.6.1 POT==0.9.6 networkit==11.2.1 scipy<=1.13.1 networkx",
+      "ok": true,
+      "log_tail": ""
+    },
+    "C": {
+      "cmd": "pip install adapters==1.3.0 transformers==4.57.6",
+      "ok": true,
+      "log_tail": ""
+    },
+    "D": {
+      "cmd": "pip install pygod==1.1.0 torch_geometric==2.6.1",
+      "ok": true,
+      "log_tail": ""
+    }
+  },
+  "blocks": {
+    "A": {
+      "status": "PASS",
+      "pass": true,
+      "checks": {
+        "hand_values_otd": true,
+        "hand_values_mix": true,
+        "flipped_values": true,
+        "direction_changes_5_of_6": true,
+        "upstream_example": true,
+        "proc2_equals_proc1": true
+      },
+      "toys": [
+        {
+          "edges": [
+            "u->v"
+          ],
+          "edge": "u->v",
+          "expected": 0.0,
+          "otd": 0.0,
+          "otd_sinkhorn_mix": 0.0,
+          "flipped_expected": 0.0,
+          "flipped": 0.0,
+          "proc2_vs_proc1_max_abs_dev": 0.0
+        },
+        {
+          "edges": [
+            "a->b",
+            "b->c"
+          ],
+          "edge": "a->b",
+          "expected": -0.5,
+          "otd": -0.5,
+          "otd_sinkhorn_mix": -0.5,
+          "flipped_expected": 0.0,
+          "flipped": 0.0,
+          "proc2_vs_proc1_max_abs_dev": 0.0
+        },
+        {
+          "edges": [
+            "a->b",
+            "b->c"
+          ],
+          "edge": "b->c",
+          "expected": -0.5,
+          "otd": -0.5,
+          "otd_sinkhorn_mix": -0.5,
+          "flipped_expected": 0.0,
+          "flipped": 0.0,
+          "proc2_vs_proc1_max_abs_dev": 0.0
+        },
+        {
+          "edges": [
+            "x1->u",
+            "x2->u",
+            "x3->u",
+            "u->v"
+          ],
+          "edge": "u->v",
+          "expected": -0.5,
+          "otd": -0.4999999999999998,
+          "otd_sinkhorn_mix": -0.4999999999999998,
+          "flipped_expected": 0.0,
+          "flipped": 0.0,
+          "proc2_vs_proc1_max_abs_dev": 0.0
+        },
+        {
+          "edges": [
+            "a->b",
+            "b->c",
+            "c->a"
+          ],
+          "edge": "a->b",
+          "expected": 0.5,
+          "otd": 0.5,
+          "otd_sinkhorn_mix": 0.5,
+          "flipped_expected": 0.0,
+          "flipped": 0.0,
+          "proc2_vs_proc1_max_abs_dev": 0.0
+        },
+        {
+          "edges": [
+            "u->v",
+            "v->r1",
+            "v->r2",
+            "v->r3",
+            "v->r4",
+            "v->r5"
+          ],
+          "edge": "u->v",
+          "expected": -0.5,
+          "otd": -0.4999999999999998,
+          "otd_sinkhorn_mix": -0.4999999999999998,
+          "flipped_expected": 0.0,
+          "flipped": 0.0,
+          "proc2_vs_proc1_max_abs_dev": 0.0
+        }
+      ],
+      "upstream_values": {
+        "0->1": -0.5,
+        "1->2": 0.0,
+        "1->3": 0.5,
+        "2->3": 0.5,
+        "3->1": 0.75
+      },
+      "graphriccicurvature": "0.6.1",
+      "methods": "OTD and OTDSinkhornMix; ATD is never used",
+      "seconds": 25.4,
+      "install_ok": {
+        "citecurv": true,
+        "A": true
+      },
+      "versions": {
+        "GraphRicciCurvature": "0.6.1",
+        "POT": "0.9.6",
+        "networkit": "11.2.1",
+        "scipy": "1.13.1",
+        "numpy": "2.0.2",
+        "networkx": "3.6.1",
+        "citecurv": "0.0.1"
+      }
+    },
+    "B": {
+      "status": "PASS",
+      "pass": true,
+      "checks": {
+        "epochs_completed": true,
+        "train_loss_finite": true,
+        "train_loss_decreased": true,
+        "val_ap_last_gt_0.6": true,
+        "leak_check_clean": true
+      },
+      "synthetic": true,
+      "dataset": {
+        "n_events": 16001,
+        "n_nodes": 2000,
+        "node_feat_dim": 64,
+        "edge_feat_dim": 1
+      },
+      "device": "cuda:0",
+      "gpu": "Tesla T4",
+      "train_loss": [
+        0.5425,
+        0.4581,
+        0.4576
+      ],
+      "val_ap": [
+        0.783,
+        0.7858,
+        0.78
+      ],
+      "test": {
+        "loss": 0.5968,
+        "ap": 0.757,
+        "auc": 0.7326
+      },
+      "leak_check": {
+        "enabled": true,
+        "n_batches": 480,
+        "n_positive_batches": 240,
+        "n_pending_messages_checked": 1761252,
+        "max_margin": 0.0,
+        "violations": 0
+      },
+      "wall_clock_s": 35.22,
+      "cuda_peak_mb": 134.2,
+      "dyglib_args": {
+        "model_name": "TGN",
+        "batch_size": 200,
+        "num_neighbors": 10,
+        "num_layers": 1,
+        "num_heads": 2,
+        "dropout": 0.1,
+        "time_feat_dim": 100,
+        "sample_neighbor_strategy": "recent",
+        "learning_rate": 0.001,
+        "num_epochs": 3,
+        "val_ratio": 0.15,
+        "test_ratio": 0.15,
+        "seed": 0,
+        "device": "cuda:0",
+        "direction_feat_index": 0
+      },
+      "seconds": 36.2,
+      "install_ok": {
+        "citecurv": true
+      },
+      "versions": {
+        "torch": "2.11.0+cu128",
+        "numpy": "2.0.2",
+        "pandas": "2.2.2",
+        "scikit-learn": "1.6.1",
+        "tqdm": "4.67.3",
+        "citecurv": "0.0.1"
+      }
+    },
+    "C": {
+      "status": "PASS",
+      "pass": true,
+      "checks": {
+        "pins_exact": true,
+        "shape_3x768": true,
+        "float32_finite": true,
+        "same_field_closer": true
+      },
+      "pins": {
+        "adapters": "1.3.0",
+        "transformers": "4.57.6"
+      },
+      "cosine_same_field": 0.938,
+      "cosine_cross_field": 0.7781,
+      "gpu": "Tesla T4",
+      "reason": null,
+      "seconds": 16.7,
+      "install_ok": {
+        "citecurv": true,
+        "C": true
+      },
+      "versions": {
+        "torch": "2.11.0+cu128",
+        "transformers": "4.57.6",
+        "adapters": "1.3.0",
+        "huggingface-hub": "0.36.2",
+        "tokenizers": "0.22.2",
+        "citecurv": "0.0.1"
+      }
+    },
+    "D": {
+      "status": "FAIL",
+      "error": "ImportError: 'NeighborSampler' requires either 'pyg-lib' or 'torch-sparse'",
+      "traceback": "Traceback (most recent call last):\n  File \"/tmp/ipykernel_271/4192957772.py\", line 54, in run_block\n    out = fn()\n          ^^^^\n  File \"/tmp/ipykernel_271/3560870504.py\", line 19, in block_d\n    detector.fit(data)\n  File \"/usr/local/lib/python3.12/dist-packages/pygod/detector/base.py\", line 461, in fit\n    for sampled_data in loader:\n                        ^^^^^^\n  File \"/usr/local/lib/python3.12/dist-packages/torch/utils/data/dataloader.py\", line 741, in __next__\n    data = self._next_data()\n           ^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/dist-packages/torch/utils/data/dataloader.py\", line 801, in _next_data\n    data = self._dataset_fetcher.fetch(index)  # may raise StopIteration\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/dist-packages/torch/utils/data/_utils/fetch.py\", line 57, in fetch\n    return self.collate_fn(data)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/dist-packages/torch_geometric/loader/node_loader.py\", line 147, in collate_fn\n    out = self.node_sampler.sample_from_nodes(input_data)\n          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/dist-packages/torch_geometric/sampler/neighbor_sampler.py\", line 322, in sample_from_nodes\n    out = node_sample(inputs, self._sample)\n          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/dist-packages/torch_geometric/sampler/neighbor_sampler.py\", line 542, in node_sample\n    out = sample_fn(seed, seed_time)\n          ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/dist-packages/torch_geometric/sampler/neighbor_sampler.py\", line 508, in _sample\n    raise ImportError(f\"'{self.__class__.__name__}' requires \"\nImportError: 'NeighborSampler' requires either 'pyg-lib' or 'torch-sparse'\n",
+      "seconds": 3.1,
+      "install_ok": {
+        "citecurv": true,
+        "D": true
+      },
+      "versions": {
+        "pygod": "1.1.0",
+        "torch_geometric": "2.6.1",
+        "torch": "2.11.0+cu128",
+        "scipy": "1.13.1",
+        "scikit-learn": "1.6.1",
+        "networkx": "3.6.1",
+        "numpy": "2.0.2"
+      }
+    }
+  },
+  "finished_utc": "2026-11-03T17:50:29+00:00",
+  "summary": {
+    "A": "PASS",
+    "B": "PASS",
+    "C": "PASS",
+    "D": "FAIL"
+  },
+  "gate": "FAIL"
+}

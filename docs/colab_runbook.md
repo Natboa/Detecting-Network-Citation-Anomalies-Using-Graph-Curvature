@@ -64,7 +64,7 @@ torch 2.x.
 
 | Notebook | Installs |
 |---|---|
-| `00_smoke` | `citecurv @ git+https://github.com/Natboa/Detecting-Network-Citation-Anomalies-Using-Graph-Curvature@<TAG>`; Block A: `GraphRicciCurvature==0.6.1 POT==0.9.6 networkit==11.2.1 "scipy<=1.13.1" networkx`; Block C: `adapters==1.3.0 transformers==4.57.6`; Block D: `pygod==1.1.0 torch_geometric==2.6.1`. It also clones the tag for the vendored DyGLib. |
+| `00_smoke` | `citecurv @ git+https://github.com/Natboa/Detecting-Network-Citation-Anomalies-Using-Graph-Curvature@<TAG>`; Block A: `GraphRicciCurvature==0.6.1 POT==0.9.6 networkit==11.2.1 "scipy<=1.13.1" networkx`; Block C: `adapters==1.3.0 transformers==4.57.6`; Block D: `pygod==1.1.0 torch_geometric==2.6.1`, then `--no-deps torch_scatter==2.1.2 torch_sparse==0.6.18 -f https://data.pyg.org/whl/torch-<runtime torch version>.html`. It also clones the tag for the vendored DyGLib. |
 | `10_data` | citecurv from a clone of the tag, `pyalex==0.21`, and Colab's own pandas, pyarrow, requests, pyyaml |
 | `20_embed` | citecurv from the tag, `adapters==1.3.0`, `transformers==4.57.6` (exactly; adapters 1.3.0 requires `transformers~=4.57.6`) |
 | `30_curvature` | citecurv from the tag; on 3.12: `GraphRicciCurvature==0.5.3.2 "scipy<=1.13.1" POT==0.9.6 networkit==11.2.1 networkx`; on 3.13 with the flag: `POT==0.9.6 networkit==11.2.1 networkx python-louvain cython packaging`, then `--no-deps GraphRicciCurvature==0.5.3.2` |
@@ -235,6 +235,9 @@ Row format: `<date> | 00_smoke, TAG <tag>, all four blocks, gate <PASS/FAIL> | T
 | `ApiKeyMissing` | `OPENALEX_API_KEY` is not set | Add the Colab secret and enable notebook access (section 4). |
 | `check_key()` reports "not counted against the key" | The key is not reaching OpenAlex in the current key mode, or usage is booked late | Rerun after a minute. If it persists, set `OPENALEX_KEY_MODE=param` (or `bearer`) and rerun; note the working mode in `PROGRESS.md` so it can go into `data.api_key_mode`. |
 | `00_smoke` Block C reports SKIP | No GPU in the runtime | Switch to a T4 runtime and rerun. If no GPU is available, run again later; the gate needs all four PASS. |
+| `00_smoke` Block D: `ImportError: 'NeighborSampler' requires either 'pyg-lib' or 'torch-sparse'` from `DOMINANT.fit` | PyG's neighbour sampler has no backend: `pip install pygod torch_geometric` alone does not bring torch-sparse or pyg-lib (Colab run of 2026-11-03, tag v0.2.0) | The install cell adds `torch_scatter==2.1.2` and `torch_sparse==0.6.18` from `https://data.pyg.org/whl/torch-<torch version>.html` (for example `torch-2.11.0+cu128`). If they were installed after `torch_geometric` was imported, restart the session and run again. |
+| "There are adapters available but none are activated for the forward pass" in Block C or `20_embed` | Logged by `adapters` while `load_specter2` loads the model, before the adapter is set active | Harmless. Checked 2026-11-03: after loading, the active setup is `Stack[specter2]`, and the embeddings change when the adapter is switched off. |
+| `drive.mount` fails with "mount failed" | The Drive consent dialog in the tab was not answered within the 120 s timeout | Run the cell again and approve the dialog with the Colab account straight away. |
 | Drive errors when listing or writing a folder | A folder with too many items | Keep the layout of section 5; never write per-event or per-work files. |
 
 ## 9. First-week checklist: S0.4, S0.5, S1.1-live, S1.2
