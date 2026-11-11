@@ -1,0 +1,55 @@
+# PROVISIONAL(G3): slice chosen under the Referencing/Attributions label rule (L12).
+# Written by citecurv.data.slice_query.write_slice_yaml (task S1.3). Do not hand-edit:
+# re-run the measurement instead. See docs/slice_shortlist.md.
+slice:
+  name: computing_topics
+  description: Computer science and data science papers
+  openalex_filter:
+    primary_topic:
+      id: T14351|T14353|T12391|T10862|T11498|T10080|T10100|T10667|T10181|T10400|T10201|T13983|T11550|T10273|T12676|T10637|T10664
+    publication_year: 2018-2023
+  filter_string: primary_topic.id:T14351|T14353|T12391|T10862|T11498|T10080|T10100|T10667|T10181|T10400|T10201|T13983|T11550|T10273|T12676|T10637|T10664,publication_year:2018-2023
+  years:
+  - 2018
+  - 2023
+  test_years:
+  - 2022
+  - 2023
+  rwdb_selectors:
+    subjects:
+    - (B/T) Computer Science
+    - (B/T) Data Science
+  rwdb_snapshot:
+    date: '2026-07-06'
+    sha256: ae6ea4b099440c85ac2044c897ccb113411bf68cff1fdb51678e3ad5e9d55ea7
+    source_url: https://gitlab.com/crossref/retraction-watch-data/-/raw/main/retraction_watch.csv
+    filename: rwdb_2026-07-06.csv
+  expected:
+    works: 333233
+    with_refs_share: 0.7619
+    edges_est: 6907920
+    labeled_papers: 615
+    labeled_papers_test: 429
+    pull_pages: 3333
+    pull_cost_usd: 0.3333
+  works_by_year:
+    2018: 47873
+    2019: 51236
+    2020: 53961
+    2021: 55590
+    2022: 58719
+    2023: 65854
+  criteria:
+    works: true
+    edges: true
+    labeled: true
+    labeled_test: true
+    budget: true
+    daily_cap: true
+  openalex:
+    corpus: core
+    topic_assignments: 'OpenAlex topics, classifier version 2: every work''s topics
+      were replaced on 2026-10-06; concepts are deprecated and no longer assigned
+      to new works'
+    measured_on: '2026-11-11'
+    pull_date: null
