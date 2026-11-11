@@ -74,7 +74,7 @@ Status values: `todo` · `in-progress` · `blocked(reason)` · `done(date)` · `
 | 2026-11-11 | `00_smoke` S0.5 rerun round 3 (from GitHub `main` = 49ec030, all 15 cells + one report-print cell), runtime 4:16 to 4:23 PM local, gate PASS | Colab Pro+ (Gilboa's account), T4 GPU, runtime version 2026.07 | about 0.11: 598.85 before, 598.74 at 4:23 PM (Resources panel, rate ~1.15/h); runtime deleted after, "0 active sessions" |
 | 2026-11-11 | `10_data` S1.3 measurement (twice: once to measure, once to write slice.yaml) + S1.2 pilot pull and join, runtime about 4:38 to 5:09 PM local | Colab Pro+ (Gilboa's account), CPU, runtime version 2026.07 | about 0.03: 598.74 before, 598.71 after (rate ~0.08/h); runtime deleted, "0 active sessions" |
 | 2026-11-11 | `20_embed` S1.6 pilot (10,000 works), runtime about 6:59 to 7:09 PM local (includes a 120 s Drive-consent timeout and one rerun from the Drive cell) | Colab Pro+ (Gilboa's account), L4 GPU, runtime version 2026.07 | about 0.36: 598.71 before, 598.35 after (rate ~1.94/h shown for L4); runtime deleted, "0 active sessions" |
-| 2026-11-11 | `20_embed` S1.6 sanity triples, runtime about 7:23 to 7:31 PM local | Colab Pro+ (Gilboa's account), CPU (High-RAM off), runtime version 2026.07 | about 0.01: 598.35 before, 598.34 after (rate ~0.08/h); runtime deleted, "0 active sessions" |
+| 2026-11-11 | `20_embed` S1.6 sanity triples, runtime about 7:23 to 7:27 PM local | Colab Pro+ (Gilboa's account), CPU (High-RAM off), runtime version 2026.07 | about 0.01: 598.35 before, 598.34 after (rate ~0.08/h); runtime deleted, "0 active sessions" |
 
 ## Session log
 
