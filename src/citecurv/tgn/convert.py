@@ -74,6 +74,27 @@ def _split_embeddings(node_emb):
     return ids, vectors
 
 
+def _pca_projection(fit_rows: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray, float]:
+    """Return (mean, components (d, k), explained variance share) of a PCA fitted on ``fit_rows``.
+
+    Uses the d x d covariance (float64) rather than an SVD of the rows, so memory stays O(d^2)
+    on the full slice. Each component's sign is fixed (largest-magnitude entry positive) so the
+    output bytes do not depend on the eigensolver's sign choice.
+    """
+    x = fit_rows.astype(np.float64)
+    mean = x.mean(axis=0)
+    xc = x - mean
+    cov = xc.T @ xc / max(len(x) - 1, 1)
+    eigval, eigvec = np.linalg.eigh(cov)  # ascending
+    order = np.argsort(eigval)[::-1][:k]
+    comps = eigvec[:, order]
+    flip = np.sign(comps[np.abs(comps).argmax(axis=0), np.arange(k)])
+    comps = comps * np.where(flip == 0, 1.0, flip)
+    total = float(np.clip(eigval, 0, None).sum())
+    explained = float(np.clip(eigval[order], 0, None).sum() / total) if total > 0 else 1.0
+    return mean, comps, explained
+
+
 def to_jodie(
     edges_df: pd.DataFrame,
     node_emb,
@@ -82,6 +103,8 @@ def to_jodie(
     *,
     node_feat_dim: int | None = None,
     on_missing: str = "zero",
+    reduce_to: int | None = None,
+    fit_ids=None,
 ) -> dict:
     """Write the DyGLib dataset ``name`` for the citation events in ``edges_df``.
 
@@ -96,6 +119,17 @@ def to_jodie(
             embedding width (a guard against feeding the wrong embedding file).
         on_missing: ``"zero"`` (zero row, counted in the meta) or ``"raise"`` (KeyError) for a
             work that appears in an event but has no embedding.
+        reduce_to: if given, project the embeddings of the works in the graph onto their top
+            ``reduce_to`` principal components before writing (PCA, centred on the fitted works).
+            DyGLib's TGN sizes each node's memory to the node-feature width
+            (``models/MemoryModel.py``: ``memory_dim = node_feat_dim``), so 768-d SPECTER2 vectors
+            give a 768-d memory per node; the 2026-11-11 pilot (309,425 nodes) ran out of T4
+            memory that way. Works without an embedding keep a zero row, which after centring
+            means "the average fitted paper". Recorded in the meta as ``node_feat_reduction``.
+        fit_ids: with ``reduce_to``, fit the PCA only on these works (those without an embedding
+            or outside the graph are ignored). Pass the training-period works on a dated split so
+            the projection uses no text from validation or test papers; ``None`` fits on every
+            embedded work in the graph.
 
     Returns:
         The meta dict, also written to ``ml_{name}_meta.json``.
@@ -135,7 +169,10 @@ def to_jodie(
     edge_feat[1:, DIRECTION_FEAT_INDEX] = 1.0
 
     n_missing = 0
+    reduction = None
     if node_emb is None:
+        if reduce_to is not None:
+            raise ValueError("reduce_to needs embeddings; got node_emb=None")
         if node_feat_dim is None:
             raise ValueError("node_feat_dim is required when node_emb is None")
         node_feat = np.zeros((n_nodes + 1, int(node_feat_dim)), dtype=np.float32)
@@ -151,9 +188,30 @@ def to_jodie(
         if absent.any() and on_missing == "raise":
             raise KeyError(f"no embedding for {int(absent.sum())} works, e.g. {list(work_ids[absent][:5])}")
         n_missing = int(absent.sum())
-        node_feat = np.zeros((n_nodes + 1, vectors.shape[1]), dtype=np.float32)
         present = np.flatnonzero(~absent)
-        node_feat[present + 1] = vectors[rows.to_numpy()[present].astype(np.int64)]
+        present_vecs = vectors[rows.to_numpy()[present].astype(np.int64)]
+        if reduce_to is not None:
+            k = int(reduce_to)
+            if not 0 < k < vectors.shape[1]:
+                raise ValueError(f"reduce_to={reduce_to} must be between 1 and the width {vectors.shape[1]} (exclusive)")
+            in_fit = np.ones(len(present), dtype=bool)
+            if fit_ids is not None:
+                in_fit = np.isin(work_ids[present], np.asarray(list(fit_ids)).astype(str))
+            n_fit = int(in_fit.sum())
+            if k > n_fit:
+                raise ValueError(f"reduce_to={k} needs at least {k} fitted works; got {n_fit}")
+            mean, comps, explained = _pca_projection(present_vecs[in_fit], k)
+            present_vecs = ((present_vecs.astype(np.float64) - mean) @ comps).astype(np.float32)
+            reduction = {
+                "method": "pca",
+                "from_dim": int(vectors.shape[1]),
+                "to_dim": k,
+                "n_fit": n_fit,
+                "fit_restricted": fit_ids is not None,
+                "explained_variance": explained,
+            }
+        node_feat = np.zeros((n_nodes + 1, present_vecs.shape[1]), dtype=np.float32)
+        node_feat[present + 1] = present_vecs
 
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -181,6 +239,7 @@ def to_jodie(
         "edge_feature_names": list(EDGE_FEATURE_NAMES),
         "direction_feat_index": DIRECTION_FEAT_INDEX,
         "n_missing_embeddings": n_missing,
+        "node_feat_reduction": reduction,
         "t_min": int(ev["t"].min()) if n_events else None,
         "t_max": int(ev["t"].max()) if n_events else None,
         "files": files,

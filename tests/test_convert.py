@@ -150,3 +150,91 @@ def test_deterministic_bytes(tmp_path):
     to_jodie(EVENTS.sample(frac=1, random_state=3), (EMB_IDS, EMB_VEC), b, "fx")
     for f in ("ml_fx.csv", "ml_fx.npy", "ml_fx_node.npy"):
         assert (a / f).read_bytes() == (b / f).read_bytes()
+
+
+# --- reduce_to: shrink node features before DyGLib (S1.7 pilot OOM, 2026-11-11) ---------------
+# DyGLib sets the TGN memory width to the node-feature width (MemoryModel.py:53), so 768-d SPECTER2
+# vectors give every node a 768-d memory and the pilot ran out of T4 memory. reduce_to projects
+# the vectors onto their top principal components before they are written.
+
+def _planar_fixture():
+    """Six works whose 6-d vectors lie on a 2-d plane (plus an offset): PCA to 2 is lossless."""
+    rng = np.random.default_rng(0)
+    basis = np.linalg.qr(rng.normal(size=(6, 2)))[0].T  # 2 orthonormal rows in R^6
+    coeff = np.array([[0, 0], [3, 1], [-2, 4], [5, -3], [1, 1], [-4, -2]], dtype=np.float64)
+    vecs = (coeff @ basis + 7.0).astype(np.float32)
+    ids = np.array([f"P{k}" for k in range(6)])
+    events = pd.DataFrame(
+        {
+            "event_id": [1, 2, 3, 4, 5, 6],
+            "src_id": ["P1", "P2", "P3", "P4", "P5", "P0"],
+            "dst_id": ["P0", "P1", "P2", "P3", "P4", "MISSING"],
+            "t": [10, 20, 30, 40, 50, 60],
+        }
+    )
+    return events, ids, vecs
+
+
+def test_reduce_to_sets_width_and_keeps_missing_rows_zero(tmp_path):
+    events, ids, vecs = _planar_fixture()
+    meta = to_jodie(events, (ids, vecs), tmp_path, "rd", reduce_to=2)
+    n = np.load(tmp_path / "ml_rd_node.npy")
+    assert n.shape == (8, 2) and n.dtype == np.float32
+    nodes, _ = load_idmap(tmp_path, "rd")
+    missing_idx = int(nodes.loc[nodes.work_id == "MISSING", "node_idx"].iloc[0])
+    assert not n[0].any() and not n[missing_idx].any()
+    assert meta["node_feat_dim"] == 2
+    red = meta["node_feat_reduction"]
+    assert red["method"] == "pca" and red["from_dim"] == 6 and red["to_dim"] == 2 and red["n_fit"] == 6
+
+
+def test_reduce_to_preserves_distances_when_lossless(tmp_path):
+    events, ids, vecs = _planar_fixture()
+    meta = to_jodie(events, (ids, vecs), tmp_path, "rd", reduce_to=2)
+    n = np.load(tmp_path / "ml_rd_node.npy")
+    nodes, _ = load_idmap(tmp_path, "rd")
+    row = {w: vecs[k] for k, w in enumerate(ids)}
+    for a in range(len(nodes)):
+        for b in range(a + 1, len(nodes)):
+            wa, wb = nodes.work_id[a], nodes.work_id[b]
+            if "MISSING" in (wa, wb):
+                continue
+            d_in = np.linalg.norm(row[wa].astype(np.float64) - row[wb])
+            d_out = np.linalg.norm(n[a + 1].astype(np.float64) - n[b + 1])
+            assert d_out == pytest.approx(d_in, rel=1e-4, abs=1e-4)
+    assert meta["node_feat_reduction"]["explained_variance"] == pytest.approx(1.0, abs=1e-6)
+
+
+def test_reduce_to_fit_ids_limits_the_fit(tmp_path):
+    events, ids, vecs = _planar_fixture()
+    meta = to_jodie(events, (ids, vecs), tmp_path, "rd", reduce_to=2, fit_ids=["P0", "P1", "P2", "NOPE"])
+    assert meta["node_feat_reduction"]["n_fit"] == 3
+
+
+def test_reduce_to_not_smaller_than_width_raises(tmp_path):
+    with pytest.raises(ValueError, match="reduce_to"):
+        to_jodie(EVENTS, (EMB_IDS, EMB_VEC), tmp_path, "fx", reduce_to=3)
+
+
+def test_reduce_to_more_than_fit_rows_raises(tmp_path):
+    events, ids, vecs = _planar_fixture()
+    with pytest.raises(ValueError, match="reduce_to"):
+        to_jodie(events, (ids, vecs), tmp_path, "rd", reduce_to=4, fit_ids=["P0", "P1", "P2"])
+
+
+def test_reduce_to_deterministic_bytes(tmp_path):
+    events, ids, vecs = _planar_fixture()
+    a, b = tmp_path / "a", tmp_path / "b"
+    to_jodie(events, (ids, vecs), a, "rd", reduce_to=2)
+    to_jodie(events.sample(frac=1, random_state=5), (ids[::-1], vecs[::-1]), b, "rd", reduce_to=2)
+    assert (a / "ml_rd_node.npy").read_bytes() == (b / "ml_rd_node.npy").read_bytes()
+
+
+def test_no_reduction_recorded_by_default(converted):
+    _, meta = converted
+    assert meta["node_feat_reduction"] is None
+
+
+def test_reduce_to_without_embeddings_raises(tmp_path):
+    with pytest.raises(ValueError, match="reduce_to"):
+        to_jodie(EVENTS, None, tmp_path, "fx", node_feat_dim=4, reduce_to=2)
