@@ -19,6 +19,7 @@ created by whoever merges the work (`git tag v0.2.0 && git push origin v0.2.0`).
 | 2 | `10_data.ipynb` | S1.2 pilot pull and label join, S1.3 slice choice, S4.0 full pull | CPU (standard) | 3.12 recommended; the notebook accepts 3.12 or newer | ready |
 | 3 | `20_embed.ipynb` | S1.6 pilot encoding, S4.0 embedding | GPU (T4) | 3.12 recommended; no version check in the notebook yet | ready |
 | 3b | `25_cited_text.ipynb` | S1.7 follow-up test (2026-11-12): title and abstract of cited works outside the pulled set, their SPECTER2 vectors (`embeddings_cited.npz`, read by `40_tgn` through `EXTRA_EMB_PATH`), and the cold-start count | GPU (T4) | 3.12 required | pilot test, not part of the planned pipeline yet |
+| 3c | `26_cited_refs.ipynb` | S2.2 follow-up test (2026-11-12): reference count and reference ids of cited works outside the pulled set (`cited_refs.parquet`), which the Forman screen and the Ollivier/coupling part need | CPU (standard) | 3.12 or newer | pilot test, not part of the planned pipeline yet |
 | 4 | `30_curvature.ipynb` | S2.2 Forman screen, S2.3 threshold/radius/budget grid and ORC escalation | CPU, high-RAM | 3.12 required (opt-in 3.13 path) | ready |
 | 5 | `40_tgn.ipynb` | S1.7 pilot training, S4.2 main runs | GPU (T4 for the pilot) | 3.12 (warns otherwise) | ready |
 | 6 | `50_eval.ipynb` | S3.4, S4.3 ablations, S4.4 baselines, S4.6 tables | GPU | 3.12 | not written yet |

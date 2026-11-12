@@ -46,6 +46,11 @@ MAX_IDS_PER_REQUEST = 100
 ID_FILTER_CANDIDATES = ("openalex", "ids.openalex", "openalex_id")
 DEFAULT_SELECT = ("id", "title", "display_name", "abstract_inverted_index", "publication_date")
 COLUMNS = ["work_id", "title", "abstract", "pub_date"]
+# what="references" (2026-11-12, after the S2.2 pilot sweep): the Forman screen needs the cited work's
+# reference count (its out-degree at any time after its publication) and the Ollivier/coupling part
+# needs the reference ids; a pull stores neither for works outside the slice.
+REFERENCE_SELECT = ("id", "publication_date", "referenced_works_count", "referenced_works")
+REFERENCE_COLUMNS = ["work_id", "pub_date", "n_refs", "ref_ids"]
 
 
 # --------------------------------------------------------------------------- ids and counts
@@ -109,6 +114,56 @@ def _row(w) -> dict:
             "pub_date": w.get("publication_date")}
 
 
+def _reference_row(w) -> dict:
+    refs = [_short_id(r) for r in (w.get("referenced_works") or []) if r]
+    n = w.get("referenced_works_count")
+    return {"work_id": _short_id(w.get("id")), "pub_date": w.get("publication_date"),
+            "n_refs": len(refs) if n is None else int(n), "ref_ids": refs}
+
+
+def _text_stats(df) -> dict:
+    has_abstract = df["abstract"].fillna("").astype(str).str.strip().ne("")
+    has_title = df["title"].fillna("").astype(str).str.strip().ne("")
+    return {"n_with_abstract": int(has_abstract.sum()), "n_no_title": int((~has_title).sum())}
+
+
+def _reference_stats(df) -> dict:
+    n_listed = df["ref_ids"].map(len)
+    return {"n_with_refs": int((n_listed > 0).sum()), "n_ref_ids": int(n_listed.sum()),
+            "n_count_mismatch": int((n_listed != df["n_refs"].astype("int64")).sum())}
+
+
+# what -> (default select, output columns, record -> row, frame -> extra stats)
+_PROFILES = {"text": (DEFAULT_SELECT, COLUMNS, _row, _text_stats),
+             "references": (REFERENCE_SELECT, REFERENCE_COLUMNS, _reference_row, _reference_stats)}
+
+
+def _part_frame(rows, columns):
+    """Part/output frame with stable column types: a list column stays a list of strings even when
+    every list in the part is empty (an all-empty list column would otherwise be written as list<null>)."""
+    df = pd.DataFrame(rows, columns=columns).astype(object)
+    if "ref_ids" in columns:
+        import pyarrow as pa
+
+        table = pa.table({"work_id": pa.array(df["work_id"], pa.string()), "pub_date": pa.array(df["pub_date"], pa.string()),
+                          "n_refs": pa.array(df["n_refs"], pa.int64()),
+                          "ref_ids": pa.array([list(x) for x in df["ref_ids"]], pa.list_(pa.string()))})
+        return table
+    return df
+
+
+def _write_frame(frame, path):
+    path = Path(path)
+    if isinstance(frame, pd.DataFrame):
+        _atomic_parquet(frame, path)
+        return
+    import pyarrow.parquet as pq
+
+    tmp = path.with_name(path.name + ".tmp")
+    pq.write_table(frame, tmp)
+    tmp.replace(path)
+
+
 def _id_filter(name: str, value: str) -> dict:
     """pyalex filter kwargs for a possibly dotted attribute: 'ids.openalex' -> {'ids': {'openalex': v}}."""
     out = value
@@ -167,9 +222,14 @@ def _atomic_parquet(df, path):
 
 
 def pull_works_by_ids(ids, out_path, *, config=None, batch_size: int = MAX_IDS_PER_REQUEST,
-                      ids_per_part: int = 5000, id_filter: str = "openalex", select=DEFAULT_SELECT,
+                      ids_per_part: int = 5000, id_filter: str = "openalex", select=None, what: str = "text",
                       keep_parts: bool = False, log=None, _fetch=None, _rate_limit=None, _sleep=None, _now=None) -> dict:
     """Fetch work_id, title, abstract, pub_date for `ids` into `out_path` (parquet); returns stats.
+
+    what="references" fetches the reference lists instead: columns work_id, pub_date, n_refs
+    (OpenAlex `referenced_works_count`) and ref_ids (short ids of `referenced_works`); its stats
+    carry n_with_refs, n_ref_ids and n_count_mismatch (rows whose list length differs from n_refs)
+    in place of n_with_abstract and n_no_title. select: fields to ask for (default: by `what`).
 
     ids: OpenAlex short ids (W...); duplicates are dropped and the list is sorted. batch_size: ids
     per request, at most 100. ids_per_part: ids per resumable part (see the module docstring).
@@ -192,6 +252,10 @@ def pull_works_by_ids(ids, out_path, *, config=None, batch_size: int = MAX_IDS_P
     if int(ids_per_part) < 1:
         raise ValueError("ids_per_part must be >= 1")
     batch_size, ids_per_part = int(batch_size), int(ids_per_part)
+    if what not in _PROFILES:
+        raise ValueError(f"what must be one of {sorted(_PROFILES)}, got {what!r}")
+    default_select, columns, make_row, extra_stats = _PROFILES[what]
+    select = default_select if select is None else select
     if config is None and _fetch is None:
         from citecurv.config import load_config
 
@@ -206,6 +270,8 @@ def pull_works_by_ids(ids, out_path, *, config=None, batch_size: int = MAX_IDS_P
     part_dir = out_path.parent / f"{out_path.stem}_parts"
     manifest_path = part_dir / "manifest.json"
     manifest = {"ids_sha256": _ids_hash(ids), "n_ids": len(ids), "ids_per_part": ids_per_part}
+    if what != "text":  # text manifests keep their earlier form, so part folders written before still resume
+        manifest["what"] = what
     if manifest_path.exists():
         if json.loads(manifest_path.read_text(encoding="utf-8")) != manifest:
             raise ValueError(f"{part_dir} was written for a different id list or part size; "
@@ -235,7 +301,7 @@ def pull_works_by_ids(ids, out_path, *, config=None, batch_size: int = MAX_IDS_P
                 cost = (cost or 0.0) + float(c)
             asked = set(batch)
             for w in resp.get("results") or []:
-                row = _row(w)
+                row = make_row(w)
                 if row["work_id"] not in asked:
                     counts["n_other_id"] += 1
                 elif row["work_id"] in have:
@@ -243,19 +309,16 @@ def pull_works_by_ids(ids, out_path, *, config=None, batch_size: int = MAX_IDS_P
                 else:
                     have.add(row["work_id"])
                     rows.append(row)
-        _atomic_parquet(pd.DataFrame(rows, columns=COLUMNS).astype(object), path)
+        _write_frame(_part_frame(rows, columns), path)
         if log is not None:
             log(f"part {p + 1} of {-(-len(ids) // ids_per_part)}: {len(rows)} of {len(chunk)} ids found, "
                 f"{counts['calls']} calls so far")
 
     df = pd.concat([pd.read_parquet(p) for p in part_paths], ignore_index=True)
-    df = df.sort_values("work_id", kind="mergesort").reset_index(drop=True)[COLUMNS]
-    _atomic_parquet(df, out_path)
-    has_abstract = df["abstract"].fillna("").astype(str).str.strip().ne("")
-    has_title = df["title"].fillna("").astype(str).str.strip().ne("")
-    stats = {"n_ids": len(ids), "n_found": int(len(df)), "n_missing": int(len(ids) - len(df)),
-             "n_with_abstract": int(has_abstract.sum()), "n_no_title": int((~has_title).sum()),
-             **counts, "cost_usd_reported": cost, "parts": len(part_paths),
+    df = df.sort_values("work_id", kind="mergesort").reset_index(drop=True)[columns]
+    _write_frame(_part_frame(df, columns), out_path)
+    stats = {"what": what, "n_ids": len(ids), "n_found": int(len(df)), "n_missing": int(len(ids) - len(df)),
+             **extra_stats(df), **counts, "cost_usd_reported": cost, "parts": len(part_paths),
              "batch_size": batch_size, "id_filter": id_filter}
     out_path.with_name(f"{out_path.stem}_stats.json").write_text(json.dumps(stats, indent=1), encoding="utf-8")
     if not keep_parts:

@@ -158,3 +158,60 @@ def test_prior_counts_match_a_brute_force_count():
                        "dst_id": rng.integers(0, 25, 400).astype(str), "t": rng.integers(0, 30, 400)})
     brute = [int(((ev.dst_id == d) & (ev.t < t)).sum()) for d, t in zip(ev.dst_id, ev.t)]
     assert list(prior_citation_counts(ev)) == brute
+
+
+# ---- reference lists of cited works (what="references"), added 2026-11-12 after the S2.2 pilot finding:
+# the Forman screen needs out_deg_t(cited) = the cited work's reference count, and the Ollivier/coupling
+# part needs the reference ids; neither exists for works outside the pulled set.
+
+def _ref_work(i, refs, count=None, date="2015-01-02"):
+    return {"id": f"https://openalex.org/{i}", "publication_date": date,
+            "referenced_works": [f"https://openalex.org/{r}" for r in refs],
+            "referenced_works_count": len(refs) if count is None else count}
+
+
+def test_pull_references_rows_and_stats(tmp_path):
+    from citecurv.data.cited import REFERENCE_COLUMNS, REFERENCE_SELECT
+
+    assert {"id", "referenced_works", "referenced_works_count", "publication_date"} <= set(REFERENCE_SELECT)
+    ids = ["W1", "W2", "W3", "W4"]
+    known = {"W1": _ref_work("W1", ["R1", "R2", "R3"]),
+             "W2": _ref_work("W2", []),                       # a work with no references
+             "W3": _ref_work("W3", ["R1"], count=5)}          # count and list disagree: both are kept
+    out = tmp_path / "cited_refs.parquet"
+    stats = pull_works_by_ids(ids, out, what="references", batch_size=2, _fetch=FakeFetch(known))
+    df = pd.read_parquet(out)
+    assert list(df.columns) == REFERENCE_COLUMNS == ["work_id", "pub_date", "n_refs", "ref_ids"]
+    assert list(df.work_id) == ["W1", "W2", "W3"]
+    by = df.set_index("work_id")
+    assert list(by.loc["W1", "ref_ids"]) == ["R1", "R2", "R3"] and int(by.loc["W1", "n_refs"]) == 3
+    assert len(by.loc["W2", "ref_ids"]) == 0 and int(by.loc["W2", "n_refs"]) == 0
+    assert list(by.loc["W3", "ref_ids"]) == ["R1"] and int(by.loc["W3", "n_refs"]) == 5
+    assert by.loc["W1", "pub_date"] == "2015-01-02"
+    assert stats["n_ids"] == 4 and stats["n_found"] == 3 and stats["n_missing"] == 1 and stats["calls"] == 2
+    assert stats["n_with_refs"] == 2 and stats["n_ref_ids"] == 4 and stats["n_count_mismatch"] == 1
+    assert stats["what"] == "references" and "n_with_abstract" not in stats
+
+
+def test_pull_references_resumes_and_keeps_empty_parts(tmp_path):
+    # part 1 holds only a work without references: its list column must survive the part round trip
+    ids = ["W1", "W2", "W3"]
+    known = {"W1": _ref_work("W1", ["R1"]), "W2": _ref_work("W2", ["R2", "R3"]), "W3": _ref_work("W3", [])}
+    out = tmp_path / "cited_refs.parquet"
+    failing = FakeFetch(known, fail_on_call=1)
+    with pytest.raises(RuntimeError):
+        pull_works_by_ids(ids, out, what="references", batch_size=2, ids_per_part=2, _fetch=failing,
+                          config={"data": {"max_retries": 0}})
+    fetch = FakeFetch(known)
+    stats = pull_works_by_ids(ids, out, what="references", batch_size=2, ids_per_part=2, _fetch=fetch)
+    assert fetch.batches == [["W3"]] and stats["parts_reused"] == 1
+    df = pd.read_parquet(out).set_index("work_id")
+    assert [len(x) for x in df["ref_ids"]] == [1, 2, 0] and stats["n_ref_ids"] == 3
+
+
+def test_pull_text_is_the_default_and_unknown_what_is_refused(tmp_path):
+    known = {"W0": _work("W0", title="t")}
+    stats = pull_works_by_ids(["W0"], tmp_path / "a.parquet", _fetch=FakeFetch(known))
+    assert stats["what"] == "text" and "n_with_abstract" in stats
+    with pytest.raises(ValueError, match="what"):
+        pull_works_by_ids(["W0"], tmp_path / "b.parquet", what="citations", _fetch=FakeFetch(known))
