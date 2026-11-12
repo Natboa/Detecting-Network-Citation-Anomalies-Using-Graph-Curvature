@@ -18,6 +18,7 @@ created by whoever merges the work (`git tag v0.2.0 && git push origin v0.2.0`).
 | 1 | `00_smoke.ipynb` | S0.5 (four go/no-go gates) | GPU (T4) | 3.12 required (opt-in 3.13 path) | ready |
 | 2 | `10_data.ipynb` | S1.2 pilot pull and label join, S1.3 slice choice, S4.0 full pull | CPU (standard) | 3.12 recommended; the notebook accepts 3.12 or newer | ready |
 | 3 | `20_embed.ipynb` | S1.6 pilot encoding, S4.0 embedding | GPU (T4) | 3.12 recommended; no version check in the notebook yet | ready |
+| 3b | `25_cited_text.ipynb` | S1.7 follow-up test (2026-11-12): title and abstract of cited works outside the pulled set, their SPECTER2 vectors (`embeddings_cited.npz`, read by `40_tgn` through `EXTRA_EMB_PATH`), and the cold-start count | GPU (T4) | 3.12 required | pilot test, not part of the planned pipeline yet |
 | 4 | `30_curvature.ipynb` | S2.2 Forman screen, S2.3 threshold/radius/budget grid and ORC escalation | CPU, high-RAM | 3.12 required (opt-in 3.13 path) | ready |
 | 5 | `40_tgn.ipynb` | S1.7 pilot training, S4.2 main runs | GPU (T4 for the pilot) | 3.12 (warns otherwise) | ready |
 | 6 | `50_eval.ipynb` | S3.4, S4.3 ablations, S4.4 baselines, S4.6 tables | GPU | 3.12 | not written yet |
@@ -313,6 +314,7 @@ Still open:
   at S4.1, or from `50_eval`'s pilot cells).
 - `embeddings.npz` covers `works.parquet` only; cited works outside the slice get zero rows in
   `to_jodie` and NaN in `static_cosine` mode. Decide at S1.3 whether to embed out-of-slice cited works.
+  Not decided at S1.3; being tested on the pilot since 2026-11-12 with `25_cited_text` (PROGRESS.md, S1.7).
 
 ## References
 
