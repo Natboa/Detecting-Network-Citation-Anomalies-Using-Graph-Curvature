@@ -39,7 +39,6 @@ import json
 import logging
 import os
 import re
-import resource
 import shutil
 import subprocess
 import sys
@@ -50,6 +49,11 @@ from types import SimpleNamespace
 import numpy as np
 
 from citecurv.config import REPO_ROOT
+
+try:
+    import resource  # Unix only: peak RSS of the training child
+except ImportError:  # Windows: peak_rss_mb is recorded as None
+    resource = None
 
 DYGLIB_ROOT_ENV = "CITECURV_DYGLIB_ROOT"
 ENTRY_POINT = "train_link_prediction.py"
@@ -72,6 +76,9 @@ TGN_DEFAULTS = {
     "val_ratio": 0.15,
     "test_ratio": 0.15,
     "negative_sample_strategy": "random",
+    # Patch P8 (third_party/DyGLib/PATCHES.md): a step updates only the memories it reads; same results, and
+    # the time per step no longer grows with the number of nodes seen. lazy_memory=False runs upstream.
+    "lazy_memory": True,
 }
 
 
@@ -141,7 +148,8 @@ class MemoryLeakCheck:
         self._cls, self._original = cls, original
         self.n_batches = 0          # calls of compute_src_dst_node_temporal_embeddings
         self.n_positive_batches = 0  # calls that also update memory
-        self.n_pending_checked = 0  # pending messages inspected
+        self.n_pending_checked = 0  # pending messages read (full scans plus the batch's own nodes)
+        self.n_full_scans = 0       # scans of the whole message dictionary (one per new dictionary, or to confirm)
         self.max_margin = None      # max over calls of (latest ts reaching memory - batch start time)
         self.violations = 0
 
@@ -154,6 +162,7 @@ class MemoryLeakCheck:
             "n_batches": self.n_batches,
             "n_positive_batches": self.n_positive_batches,
             "n_pending_messages_checked": self.n_pending_checked,
+            "n_full_scans": self.n_full_scans,
             "max_margin": self.max_margin,
             "violations": self.violations,  # a violation also raises MemoryLeakError
         }
@@ -169,21 +178,45 @@ def install_memory_leak_check(memory_model_cls) -> MemoryLeakCheck:
     that the messages just stored are not later than the batch's last event. Together these say
     that the memory used to embed any event of the batch reflects only events with
     ``ts <= t_b <= t`` (no event later than the batch start). Raises ``MemoryLeakError``.
+
+    Cost (2026-11-12, training speed): scanning every pending message on every call grew with the
+    number of nodes seen. The hook now keeps the latest pending ``ts`` of the message dictionary it
+    last scanned. Messages enter that dictionary only inside the wrapped call (positive batches),
+    and after each such call the hook reads the messages of the batch's own nodes, which hold every
+    message just stored, so the running value is the exact latest pending ``ts`` while batches come
+    in time order (new messages are at least the batch start, which the check already held at least
+    as late as every older pending message). A new dictionary object (memory reset each epoch,
+    ``reload_memory_bank``, a checkpoint load) is scanned in full once. Verdicts and ``max_margin``
+    therefore equal the full scan's. Not covered: code that writes a message into the same
+    dictionary object outside the wrapped call (DyGLib has none).
     """
     original = memory_model_cls.compute_src_dst_node_temporal_embeddings
     stats = MemoryLeakCheck(memory_model_cls, original)
+    tracked = {"messages": None, "latest": -np.inf}  # dictionary last scanned, latest pending ts in it
+
+    def full_scan(bank):
+        latest, n = -np.inf, 0
+        for msgs in bank.node_raw_messages.values():
+            for _, ts in msgs:
+                n += 1
+                latest = max(latest, float(ts))
+        stats.n_full_scans += 1
+        stats.n_pending_checked += n
+        tracked["messages"], tracked["latest"] = bank.node_raw_messages, latest
+        return latest
+
+    def pending_latest(bank):
+        if tracked["messages"] is not bank.node_raw_messages:
+            return full_scan(bank)
+        return tracked["latest"]
 
     def checked(self, src_node_ids, dst_node_ids, node_interact_times, edge_ids=None, edges_are_positive=True,
                 num_neighbors=20):
+        bank = self.memory_bank
         t_b = float(np.min(node_interact_times))
-        latest = float(self.memory_bank.node_last_updated_times.detach().max().item())
-        n_pending = 0
-        for msgs in self.memory_bank.node_raw_messages.values():
-            for _, ts in msgs:
-                n_pending += 1
-                latest = max(latest, float(ts))
+        last_update = float(bank.node_last_updated_times.detach().max().item())
+        latest = max(last_update, pending_latest(bank))
         stats.n_batches += 1
-        stats.n_pending_checked += n_pending
         margin = latest - t_b
         stats.max_margin = margin if stats.max_margin is None else max(stats.max_margin, margin)
         if latest > t_b:
@@ -195,8 +228,15 @@ def install_memory_leak_check(memory_model_cls) -> MemoryLeakCheck:
         if edges_are_positive:
             stats.n_positive_batches += 1
             t_end = float(np.max(node_interact_times))
-            stored = max((float(ts) for msgs in self.memory_bank.node_raw_messages.values() for _, ts in msgs),
-                         default=-np.inf)
+            if tracked["messages"] is not bank.node_raw_messages:
+                stored = full_scan(bank)
+            else:  # new messages sit on the batch's nodes; every other pending message was already counted
+                stored = tracked["latest"]
+                for node_id in np.unique(np.concatenate([src_node_ids, dst_node_ids])):
+                    for _, ts in bank.node_raw_messages.get(node_id, ()):
+                        stats.n_pending_checked += 1
+                        stored = max(stored, float(ts))
+                tracked["latest"] = stored
             if stored > t_end:
                 stats.violations += 1
                 raise MemoryLeakError(f"stored a message at ts={stored} after a batch ending at t={t_end}")
@@ -544,7 +584,7 @@ def _child_main(cfg_path: str) -> int:
                            if isinstance(val, (str, int, float, bool, type(None)))} if captured else {},
             log_records=capture.records,
             leak_check=stats.as_dict() if stats is not None else {"enabled": False},
-            peak_rss_mb=round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0, 1),
+            peak_rss_mb=round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0, 1) if resource else None,
             cuda_peak_mb=round(torch.cuda.max_memory_allocated() / 2**20, 1) if torch.cuda.is_available() else None,
             wall_clock_s=round(time.time() - t0, 2),
         )

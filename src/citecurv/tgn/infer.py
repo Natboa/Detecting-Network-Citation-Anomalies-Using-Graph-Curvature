@@ -156,8 +156,12 @@ def infer_tgn(
     num_threads: int | None = None,
     save_embeddings: bool = True,
     embeddings_dtype: str = "float32",
+    lazy_memory: bool | None = None,
 ):
     """Score every event of ``data_dir/ml_{name}.*`` with the TGN in ``run_dir``.
+
+    ``lazy_memory`` (patch P8, same scores up to float rounding, faster on large graphs) defaults to
+    what the run was trained with (``resolved_args.json``; runs from before P8 used upstream).
 
     Returns ``(scores, embeddings_path)``: the ``tgn_event_scores`` frame in canonical event order
     and the path of ``tgn_event_embeddings.npz`` (None when ``save_embeddings=False``). Files go to
@@ -206,13 +210,16 @@ def infer_tgn(
     edge_dst = np.zeros(edge_feat.shape[0], dtype=np.longlong)
     edge_dst[eids] = dst
     direction_feat_index = int(args.get("direction_feat_index", -1))
+    if lazy_memory is None:
+        lazy_memory = bool(args.get("lazy_memory", False))
 
     torch.manual_seed(seed)
     backbone = dg.MemoryModel(node_raw_features=node_feat, edge_raw_features=edge_feat, neighbor_sampler=sampler,
                               time_feat_dim=int(args["time_feat_dim"]), model_name="TGN",
                               num_layers=int(args["num_layers"]), num_heads=int(args["num_heads"]),
                               dropout=float(args["dropout"]), device=device,
-                              direction_feat_index=direction_feat_index, edge_dst_node_ids=edge_dst)
+                              direction_feat_index=direction_feat_index, edge_dst_node_ids=edge_dst,
+                              lazy_memory=bool(lazy_memory))
     d = node_feat.shape[1]
     model = nn.Sequential(backbone, dg.MergeLayer(input_dim1=d, input_dim2=d, hidden_dim=d, output_dim=1))
     state = torch.load(ckpt, map_location=device)
@@ -281,7 +288,7 @@ def infer_tgn(
         "n_events": m, "n_batches": len(bounds), "batch_size": batch_size,
         "align_to_timestamps": align_to_timestamps, "max_batch_size": cap,
         "n_split_timestamp_groups": int((group_sizes > cap).sum()) if align_to_timestamps else None,
-        "seed": seed, "device": device, "direction_feat_index": direction_feat_index,
+        "seed": seed, "device": device, "direction_feat_index": direction_feat_index, "lazy_memory": bool(lazy_memory),
         "num_neighbors": num_neighbors, "p_clip": P_CLIP, "scores_file": scores_file,
         "embeddings_file": emb_path.name if emb_path else None, "embeddings_dtype": embeddings_dtype,
         "leak_check": hook.as_dict() if hook is not None else {"enabled": False},

@@ -50,6 +50,7 @@ def get_link_prediction_args(is_evaluation: bool = False):
     parser.add_argument('--load_best_configs', action='store_true', default=False, help='whether to load the best configurations')
     parser.add_argument('--seed_offset', type=int, default=0, help='citecurv P7: run r uses seed r + seed_offset')
     parser.add_argument('--direction_feat_index', type=int, default=-1, help='citecurv P5: edge-feature column of the citation-direction indicator, -1 = off')
+    parser.add_argument('--lazy_memory', action='store_true', default=False, help='citecurv P8: a step updates only the memories it reads (TGN)')
 
     try:
         args = parser.parse_args()

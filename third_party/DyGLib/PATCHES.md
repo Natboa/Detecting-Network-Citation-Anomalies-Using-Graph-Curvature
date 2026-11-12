@@ -28,6 +28,7 @@ confirmed failing on the unpatched code (Python 3.12.3, torch 2.15.0, see "Verif
 | P5 | `models/MemoryModel.py`, `train_link_prediction.py`, `utils/load_configs.py` | keeping citation direction under bidirectional messaging | off by default (`--direction_feat_index -1`): upstream code path |
 | P6 | `utils/load_configs.py` | datasets not named after the 14 benchmarks | — |
 | P7 | `train_link_prediction.py`, `utils/load_configs.py` | the citecurv seed list (one run per seed) | `--seed_offset 0`: upstream seeds |
+| P8 | `models/MemoryModel.py`, `train_link_prediction.py`, `utils/load_configs.py` | training time on graphs with many nodes (same results) | off by default (no `--lazy_memory`): upstream code path; citecurv turns it on |
 
 ### P1: feature widths derived from the data
 
@@ -163,6 +164,47 @@ Tests: `tests/test_tgn_infer.py::test_p5_memory_messages_keep_direction` and
 - reason: upstream seeds run r with seed r, so seed 3 alone needs `--num_runs 4` and three wasted
   runs. With `--num_runs 1 --seed_offset s` one run uses seed s and saves under `TGN_seed{s}`.
 
+### P8: a step updates only the memories it reads (opt-in)
+
+Problem (measured 2026-11-12, see `tests/test_tgn_memory_scope.py` and PROGRESS.md): upstream
+`compute_src_dst_node_temporal_embeddings` calls `get_updated_memories` over all nodes on every call
+(twice per training step). That loops over every node id in Python (`MessageAggregator`), runs the
+memory GRU, and later its backward pass, on every node with a pending message, and
+`detach_memory_bank` visits every node after every step. Every node ever seen keeps one pending
+message, so the time per step grows with the number of nodes seen: on the S1.7 pilot (309,425
+nodes) from about 1.2 s to about 4 s within one epoch on a T4.
+
+What P8 changes, only when `lazy_memory=True` (TGN only; JODIE and DyRep keep upstream):
+
+- `MemoryModel.__init__`: new keyword `lazy_memory` (stored as `self.lazy_memory`, false unless the
+  model is TGN), passed to `MemoryBank(track_undetached=...)`.
+- `compute_src_dst_node_temporal_embeddings`: instead of `get_updated_memories(all nodes)`, uses
+  `LazyUpdatedMemories(self)`, a new class (after `MemoryModel`). The embedding module reads the
+  memory only as `node_memories[ids]`; indexing the lazy object returns, for those ids only, the
+  stored memory (detached, as upstream's `node_memories.data.clone()`) with the GRU update applied
+  to the ids that have a pending message, with upstream's aggregator (last message) and its
+  "update to time in the past" assertion. It reads the message dictionary with `.get`, so it does
+  not add an empty entry per node. The second return value (last-updated times) is `None`; only
+  JODIE reads it.
+- `MemoryBank`: new keyword `track_undetached`; `store_node_raw_messages` records the node ids it
+  stored; `detach_memory_bank` then detaches only those, because every other message was detached
+  by an earlier call. If the dictionary object was replaced since the last detach
+  (`reload_memory_bank`, `EarlyStopping` loading a checkpoint), it visits every node as upstream.
+- `utils/load_configs.py`: `--lazy_memory` (store_true, default off). `train_link_prediction.py`
+  passes it to `MemoryModel`.
+- `citecurv.tgn.train.TGN_DEFAULTS` sets `lazy_memory: True`; `citecurv.tgn.infer.infer_tgn` uses
+  the run's setting from `resolved_args.json` (runs from before P8: upstream).
+
+Why the results do not change: the loss depends on the memory only through the rows the embedding
+module reads, and a row's GRU update depends only on that node's memory and message, so rows that
+are never read change neither the forward values nor the gradients. The GRU now runs on fewer
+rows, so the last bits of a matrix product can differ (float rounding). Tests:
+`tests/test_tgn_memory_scope.py` compares several training steps (losses, embeddings, weights,
+memories, pending messages, one and two layers) and an inference replay with the switch on and
+off within 1e-5, checks that a step runs the GRU only on nodes it reads, and that no message keeps
+a gradient graph after `detach_memory_bank`; `tests/test_tgn_infer.py::
+test_patch_p8_changes_no_result_end_to_end` trains and scores the tiny stream both ways.
+
 ## Verification
 
 - Unpatched failures reproduced on Python 3.12.3 / torch 2.15.0+cu132 / numpy 2.5.4 / pandas 3.1.0:
@@ -182,11 +224,8 @@ Tests: `tests/test_tgn_infer.py::test_p5_memory_messages_keep_direction` and
   arguments and seed runs with `set_random_seed(run)`: evaluating a P5 checkpoint with that script
   runs the upstream message layout. citecurv evaluates through `citecurv.tgn.infer` instead.
 - `train_node_classification.py` / `evaluate_node_classification.py`: not used, not checked.
-- Scaling (not a bug): `MemoryModel.compute_src_dst_node_temporal_embeddings` calls
-  `get_updated_memories` over all nodes in every batch, which loops over every node in Python
-  (`MessageAggregator.aggregate_messages`) and clones the whole memory matrix. Cost per batch grows
-  with the node count (about 300K nodes x 768 floats, roughly 0.9 GB per clone, on the planned
-  slice); measure on the S1.7 pilot before S4.2.
+- Scaling: upstream `compute_src_dst_node_temporal_embeddings` updates the memory of every node
+  with a pending message in every batch. Measured on the S1.7 pilot and fixed by P8 (opt-in).
 
 ## Where S1.8 (text-initialised memory) would go
 

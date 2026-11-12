@@ -193,6 +193,64 @@ def test_leak_hook(torch_mod):
     assert dg.MemoryModel.compute_src_dst_node_temporal_embeddings is original
 
 
+def _chain_events(n):
+    """n events (k, k + 1) at t = k: every node ends with a pending message."""
+    return [(k, k + 1, float(k)) for k in range(1, n + 1)]
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_leak_hook_work_per_batch_does_not_grow_with_pending_messages(torch_mod, lazy):
+    """The hook reads the messages of the batch's own nodes, plus one full scan per new message dictionary."""
+    from citecurv.tgn.train import install_memory_leak_check
+
+    dg, model, (u, i, t, eid) = build_model(torch_mod, 0, _chain_events(300))
+    model.lazy_memory = model.memory_bank.track_undetached = lazy
+    hook = install_memory_leak_check(dg.MemoryModel)
+    try:
+        with torch_mod.no_grad():
+            for s in range(0, 296, 4):
+                model.compute_src_dst_node_temporal_embeddings(u[s:s + 4], i[s:s + 4], t[s:s + 4], eid[s:s + 4], True, 3)
+            before = hook.n_pending_checked
+            model.compute_src_dst_node_temporal_embeddings(u[296:], i[296:], t[296:], eid[296:], True, 3)
+            per_batch = hook.n_pending_checked - before
+    finally:
+        hook.remove()
+    pending = sum(len(v) for v in model.memory_bank.node_raw_messages.values())
+    assert pending > 250 and per_batch <= 4 * 4  # at most a few messages per node of a 4-event batch
+    assert hook.violations == 0 and hook.n_full_scans >= 1
+
+
+def test_leak_hook_same_verdict_as_full_scan_across_reload(torch_mod):
+    """Backup, reload (a new message dictionary, as DyGLib does for new-node validation) and a planted
+    future message in a reloaded dictionary: the hook rescans and gives the full-scan verdict and margin."""
+    from citecurv.tgn.train import MemoryLeakError, install_memory_leak_check
+
+    dg, model, (u, i, t, eid) = build_model(torch_mod, 0, _chain_events(40))
+    hook = install_memory_leak_check(dg.MemoryModel)
+    bank = model.memory_bank
+    try:
+        with torch_mod.no_grad():
+            for s in range(0, 20, 4):  # t = 1..20
+                model.compute_src_dst_node_temporal_embeddings(u[s:s + 4], i[s:s + 4], t[s:s + 4], eid[s:s + 4], True, 3)
+            backup = bank.backup_memory_bank()
+            for s in range(20, 32, 4):  # t = 21..32
+                model.compute_src_dst_node_temporal_embeddings(u[s:s + 4], i[s:s + 4], t[s:s + 4], eid[s:s + 4], True, 3)
+            assert hook.max_margin == -1.0  # every batch starts one day after the latest pending message
+            bank.reload_memory_bank(backup)
+            # back to t = 21 with the t <= 20 state: legal, although messages at t = 32 were stored before
+            model.compute_src_dst_node_temporal_embeddings(u[20:24], i[20:24], t[20:24], eid[20:24], False, 3)
+            assert hook.violations == 0 and hook.max_margin == -1.0
+            planted = bank.backup_memory_bank()
+            node = next(k for k, v in planted[2].items() if v)
+            planted[2][node][0] = (planted[2][node][0][0], np.float64(99.0))
+            bank.reload_memory_bank(planted)
+            with pytest.raises(MemoryLeakError):
+                model.compute_src_dst_node_temporal_embeddings(u[20:24], i[20:24], t[20:24], eid[20:24], False, 3)
+            assert hook.violations == 1
+    finally:
+        hook.remove()
+
+
 # --------------------------------------------------------------------------- end to end
 
 def test_train_outputs(trained):
@@ -205,6 +263,27 @@ def test_train_outputs(trained):
     assert len(metrics["epochs"]) == 1 and np.isfinite(metrics["epochs"][0]["train_loss"])
     resolved = json.loads((run / "resolved_args.json").read_text())
     assert resolved["dyglib"]["seed"] == 0 and resolved["dyglib"]["direction_feat_index"] == 0
+    assert resolved["dyglib"]["lazy_memory"] is True  # patch P8 on by default (TGN_DEFAULTS)
+
+
+def test_patch_p8_changes_no_result_end_to_end(trained, tmp_path):
+    """Training and scoring with patch P8 off (upstream memory update) give the same numbers."""
+    from citecurv.tgn.infer import infer_tgn
+    from citecurv.tgn.train import train_tgn
+
+    base, _, metrics = trained
+    off = train_tgn(base / "data", "tiny", epochs=1, seed=0, node_feat_dim=8, out_dir=tmp_path / "run_off",
+                    leak_check=True, num_threads=1, batch_size=50, learning_rate=1e-3, lazy_memory=False)
+    resolved = json.loads((tmp_path / "run_off" / "resolved_args.json").read_text())
+    assert resolved["dyglib"]["lazy_memory"] is False
+    for key in ("train_loss", "val_ap", "val_auc"):
+        assert off["epochs"][0][key] == pytest.approx(metrics["epochs"][0][key], abs=2e-4)  # DyGLib logs 4 decimals
+    assert off["test"]["ap"] == pytest.approx(metrics["test"]["ap"], abs=2e-4)
+    on_scores, _ = infer_tgn(base / "run", base / "data", "tiny", out_dir=tmp_path / "on", batch_size=40)
+    off_scores, _ = infer_tgn(tmp_path / "run_off", base / "data", "tiny", out_dir=tmp_path / "off", batch_size=40)
+    np.testing.assert_allclose(on_scores.p_link, off_scores.p_link, atol=1e-5)
+    assert json.loads((tmp_path / "on" / "tgn_infer_meta.json").read_text())["lazy_memory"] is True
+    assert json.loads((tmp_path / "off" / "tgn_infer_meta.json").read_text())["lazy_memory"] is False
 
 
 def test_infer_contract(trained, tmp_path):

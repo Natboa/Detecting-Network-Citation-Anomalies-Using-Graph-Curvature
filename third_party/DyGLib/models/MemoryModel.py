@@ -12,7 +12,8 @@ class MemoryModel(torch.nn.Module):
     def __init__(self, node_raw_features: np.ndarray, edge_raw_features: np.ndarray, neighbor_sampler: NeighborSampler,
                  time_feat_dim: int, model_name: str = 'TGN', num_layers: int = 2, num_heads: int = 2, dropout: float = 0.1,
                  src_node_mean_time_shift: float = 0.0, src_node_std_time_shift: float = 1.0, dst_node_mean_time_shift_dst: float = 0.0,
-                 dst_node_std_time_shift: float = 1.0, device: str = 'cpu', direction_feat_index: int = -1, edge_dst_node_ids: np.ndarray = None):  # citecurv P5
+                 dst_node_std_time_shift: float = 1.0, device: str = 'cpu', direction_feat_index: int = -1, edge_dst_node_ids: np.ndarray = None,  # citecurv P5
+                 lazy_memory: bool = False):  # citecurv P8
         """
         General framework for memory-based models, support TGN, DyRep and JODIE.
         :param node_raw_features: ndarray, shape (num_nodes + 1, node_feat_dim)
@@ -46,6 +47,7 @@ class MemoryModel(torch.nn.Module):
         self.dst_node_mean_time_shift_dst = dst_node_mean_time_shift_dst
         self.dst_node_std_time_shift = dst_node_std_time_shift
         self.direction_feat_index = direction_feat_index  # citecurv P5
+        self.lazy_memory = lazy_memory and model_name == 'TGN'  # citecurv P8: update only the memories a step reads (TGN only)
 
         self.model_name = model_name
         # number of nodes, including the padded node
@@ -60,7 +62,7 @@ class MemoryModel(torch.nn.Module):
         self.message_aggregator = MessageAggregator()
 
         # memory modules
-        self.memory_bank = MemoryBank(num_nodes=self.num_nodes, memory_dim=self.memory_dim)
+        self.memory_bank = MemoryBank(num_nodes=self.num_nodes, memory_dim=self.memory_dim, track_undetached=self.lazy_memory)  # citecurv P8
         if self.model_name == 'TGN':
             self.memory_updater = GRUMemoryUpdater(memory_bank=self.memory_bank, message_dim=self.message_dim, memory_dim=self.memory_dim)
         elif self.model_name in ['DyRep', 'JODIE']:
@@ -106,8 +108,11 @@ class MemoryModel(torch.nn.Module):
         # so we return all nodes' memory with shape (num_nodes, ) by using self.get_updated_memory
         # updated_node_memories, Tensor, shape (num_nodes, memory_dim)
         # updated_node_last_updated_times, Tensor, shape (num_nodes, )
-        updated_node_memories, updated_node_last_updated_times = self.get_updated_memories(node_ids=np.array(range(self.num_nodes)),
-                                                                                           node_raw_messages=self.memory_bank.node_raw_messages)
+        if self.lazy_memory:  # citecurv P8: rows are computed when the embedding module reads them, same values as below
+            updated_node_memories, updated_node_last_updated_times = LazyUpdatedMemories(self), None  # citecurv P8
+        else:  # citecurv P8
+            updated_node_memories, updated_node_last_updated_times = self.get_updated_memories(node_ids=np.array(range(self.num_nodes)),
+                                                                                               node_raw_messages=self.memory_bank.node_raw_messages)
         # compute the node temporal embeddings using the embedding module
         if self.model_name == 'JODIE':
             # compute differences between the time the memory of a node was last updated, and the time for which we want to compute the embedding of a node
@@ -267,6 +272,35 @@ class MemoryModel(torch.nn.Module):
             self.embedding_module.neighbor_sampler.reset_random_state()
 
 
+class LazyUpdatedMemories:  # citecurv P8
+    """Stands in for the (num_nodes, memory_dim) tensor that get_updated_memories returns. Indexing it with node ids
+    gives those rows only: the stored memory, or the GRU update with the node's pending message if it has one.
+    The embedding module only indexes node_memories, so each step's cost follows the nodes it reads,
+    not every node with a pending message."""
+
+    def __init__(self, memory_model: MemoryModel):
+        self.memory_model = memory_model
+
+    def __getitem__(self, index):
+        node_ids = index.cpu().numpy() if torch.is_tensor(index) else np.asarray(index)
+        unique_node_ids, inverse = np.unique(node_ids.reshape(-1), return_inverse=True)
+        memory_bank = self.memory_model.memory_bank
+        node_raw_messages = memory_bank.node_raw_messages
+        # .get, not [], so reading does not add an empty entry for every node to the defaultdict
+        pending_node_ids = np.array([node_id for node_id in unique_node_ids if len(node_raw_messages.get(node_id, ())) > 0],
+                                    dtype=unique_node_ids.dtype)
+        # Tensor, shape (num_unique_node_ids, memory_dim), a detached copy as in get_updated_memories (node_memories.data.clone())
+        rows = memory_bank.node_memories.data[torch.from_numpy(unique_node_ids)]
+        if len(pending_node_ids) > 0:
+            to_update_node_ids, unique_node_messages, unique_node_timestamps = \
+                self.memory_model.message_aggregator.aggregate_messages(node_ids=pending_node_ids, node_raw_messages=node_raw_messages)
+            assert (memory_bank.get_node_last_updated_times(unique_node_ids=to_update_node_ids) <=
+                    torch.from_numpy(unique_node_timestamps).float().to(unique_node_messages.device)).all().item(), "Trying to update memory to time in the past!"
+            positions = torch.from_numpy(np.searchsorted(unique_node_ids, to_update_node_ids))
+            rows[positions] = self.memory_model.memory_updater.memory_updater(unique_node_messages, rows[positions])
+        return rows[torch.from_numpy(inverse.reshape(-1))].reshape(*node_ids.shape, rows.shape[-1])
+
+
 # Message-related Modules
 class MessageAggregator(nn.Module):
 
@@ -307,7 +341,7 @@ class MessageAggregator(nn.Module):
 # Memory-related Modules
 class MemoryBank(nn.Module):
 
-    def __init__(self, num_nodes: int, memory_dim: int):
+    def __init__(self, num_nodes: int, memory_dim: int, track_undetached: bool = False):  # citecurv P8
         """
         Memory bank, store node memories, node last updated times and node raw messages.
         :param num_nodes: int, number of nodes
@@ -316,6 +350,9 @@ class MemoryBank(nn.Module):
         super(MemoryBank, self).__init__()
         self.num_nodes = num_nodes
         self.memory_dim = memory_dim
+        # citecurv P8: remember which nodes got messages since the last detach, so detach_memory_bank need not visit every node
+        self.track_undetached = track_undetached
+        self.undetached_node_ids, self.tracked_node_raw_messages = set(), None
 
         # Parameter, treat memory as parameters so that it is saved and loaded together with the model, shape (num_nodes, memory_dim)
         self.node_memories = nn.Parameter(torch.zeros((self.num_nodes, self.memory_dim)), requires_grad=False)
@@ -334,6 +371,7 @@ class MemoryBank(nn.Module):
         self.node_memories.data.zero_()
         self.node_last_updated_times.data.zero_()
         self.node_raw_messages = defaultdict(list)
+        self.undetached_node_ids, self.tracked_node_raw_messages = set(), self.node_raw_messages  # citecurv P8
 
     def get_memories(self, node_ids: np.ndarray):
         """
@@ -382,13 +420,21 @@ class MemoryBank(nn.Module):
         """
         self.node_memories.detach_()
 
+        # citecurv P8: messages only enter through store_node_raw_messages, so all others were detached by an earlier call;
+        # when the dictionary was replaced (reload_memory_bank, a checkpoint load) visit every node as upstream does
+        if self.track_undetached and self.tracked_node_raw_messages is self.node_raw_messages:  # citecurv P8
+            node_ids_to_detach = self.undetached_node_ids  # citecurv P8
+        else:  # citecurv P8
+            node_ids_to_detach = list(self.node_raw_messages.keys())  # citecurv P8
         # Detach all stored messages
-        for node_id, node_raw_messages in self.node_raw_messages.items():
+        for node_id in node_ids_to_detach:  # citecurv P8 (upstream: for node_id, node_raw_messages in self.node_raw_messages.items():)
+            node_raw_messages = self.node_raw_messages[node_id]  # citecurv P8
             new_node_raw_messages = []
             for node_raw_message in node_raw_messages:
                 new_node_raw_messages.append((node_raw_message[0].detach(), node_raw_message[1]))
 
             self.node_raw_messages[node_id] = new_node_raw_messages
+        self.undetached_node_ids, self.tracked_node_raw_messages = set(), self.node_raw_messages  # citecurv P8
 
     def store_node_raw_messages(self, node_ids: np.ndarray, new_node_raw_messages: dict):
         """
@@ -400,6 +446,8 @@ class MemoryBank(nn.Module):
         """
         for node_id in node_ids:
             self.node_raw_messages[node_id].extend(new_node_raw_messages[node_id])
+        if self.track_undetached:  # citecurv P8
+            self.undetached_node_ids.update(node_ids)  # citecurv P8
 
     def clear_node_raw_messages(self, node_ids: np.ndarray):
         """
