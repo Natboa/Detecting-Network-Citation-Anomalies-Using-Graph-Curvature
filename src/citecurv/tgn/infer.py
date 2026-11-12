@@ -97,6 +97,29 @@ def batch_boundaries(ts, batch_size: int, align_to_timestamps: bool = True, max_
     return out
 
 
+def paired_share(p_link, neg_p_link) -> dict:
+    """How often each observed citation scores above its own negative, with ties reported apart.
+
+    Exact ties are common: every cited work with no text vector and no earlier event gets the same
+    embedding, so an observed and a negative destination that are both such works score the same
+    (found on the pilot, 2026-11-12). ``strict`` counts a tie as a loss, ``ties_as_half`` counts it
+    as half a win (the paired form of AUC), ``without_ties`` leaves ties out (None if all are ties).
+    """
+    p = np.asarray(p_link, dtype=np.float64)
+    q = np.asarray(neg_p_link, dtype=np.float64)
+    if p.shape != q.shape or p.ndim != 1 or len(p) == 0:
+        raise ValueError("p_link and neg_p_link must be non-empty 1-d arrays of the same length")
+    win, tie = p > q, p == q
+    n_free = int((~tie).sum())
+    return {
+        "n": int(len(p)),
+        "strict": float(win.mean()),
+        "ties": float(tie.mean()),
+        "ties_as_half": float((win + 0.5 * tie).mean()),
+        "without_ties": float(win[~tie].sum() / n_free) if n_free else None,
+    }
+
+
 def _find_checkpoint(run_dir: Path) -> Path:
     metrics = run_dir / "metrics.json"
     if metrics.is_file():

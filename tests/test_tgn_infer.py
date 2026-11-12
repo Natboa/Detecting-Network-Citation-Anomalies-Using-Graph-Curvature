@@ -23,10 +23,28 @@ import pandas as pd
 import pytest
 
 from citecurv.tgn.convert import to_jodie
-from citecurv.tgn.infer import batch_boundaries
+from citecurv.tgn.infer import batch_boundaries, paired_share
 
 
 # --------------------------------------------------------------------------- pure helpers
+
+def test_paired_share_counts_ties_as_half():
+    # wins: event 0; ties: events 1 and 3; loss: event 2
+    out = paired_share([0.9, 0.5, 0.5, 0.2], [0.1, 0.5, 0.6, 0.2])
+    assert out == {"n": 4, "strict": 0.25, "ties": 0.5, "ties_as_half": 0.5, "without_ties": 0.5}
+
+
+def test_paired_share_all_ties_has_no_tie_free_share():
+    out = paired_share([0.3, 0.3], [0.3, 0.3])
+    assert out["ties"] == 1.0 and out["ties_as_half"] == 0.5 and out["without_ties"] is None
+
+
+def test_paired_share_rejects_mismatched_or_empty_input():
+    with pytest.raises(ValueError):
+        paired_share([0.1, 0.2], [0.1])
+    with pytest.raises(ValueError):
+        paired_share([], [])
+
 
 def test_batch_boundaries_fixed_size():
     assert batch_boundaries(np.arange(7), 3, align_to_timestamps=False) == [(0, 3), (3, 6), (6, 7)]
