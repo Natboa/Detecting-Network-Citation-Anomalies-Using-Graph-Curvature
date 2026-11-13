@@ -57,8 +57,9 @@ REFERENCE_COLUMNS = ["work_id", "pub_date", "n_refs", "ref_ids"]
 
 def cited_only_ids(events, works) -> np.ndarray:
     """Sorted unique `dst_id` values of `events` that are not a `work_id` of `works` (str array)."""
-    cited = pd.unique(events["dst_id"].astype(str))
-    return np.setdiff1d(cited, works["work_id"].astype(str).to_numpy())
+    # set difference in Python: np.setdiff1d on pandas 3 string arrays took minutes on the pilot (2026-11-13)
+    have = set(works["work_id"].astype(str))
+    return np.array(sorted(set(events["dst_id"].astype(str)) - have), dtype=object)
 
 
 def prior_citation_counts(events) -> np.ndarray:
@@ -324,3 +325,41 @@ def pull_works_by_ids(ids, out_path, *, config=None, batch_size: int = MAX_IDS_P
     if not keep_parts:
         shutil.rmtree(part_dir, ignore_errors=True)
     return stats
+
+
+# --------------------------------------------------------------------------- reference lists as context rows
+
+def reference_events(refs, *, exclude_src=None, start_event_id: int = 0):
+    """Context rows for the event table from a what="references" frame; returns (frame, stats).
+
+    One row per (work, referenced work): event_id (consecutive from `start_event_id`), src_id = the
+    work, dst_id = the referenced work, t = the work's publication day (int days since 1970-01-01,
+    the unit of events.t). Appended to the events, these rows give the Forman screen and the
+    time-sliced graph the out-edges of cited works that the pull did not store; only the original
+    event ids are scored. A row enters a count at time t only if its own t <= t, so a cited work
+    whose recorded publication day is later than the citing event contributes nothing to it.
+
+    exclude_src: work ids whose references are already event rows (the pulled works). Works without
+    a parseable pub_date are dropped (their rows cannot be placed in time) and counted.
+    Stats: n_works, n_excluded, n_no_date, n_without_refs (dated, kept works with an empty list),
+    n_rows, n_ref_ids_dropped_no_date.
+    """
+    df = refs[["work_id", "pub_date", "ref_ids"]].copy()
+    n_works = len(df)
+    if exclude_src is not None:
+        df = df[~df["work_id"].astype(str).isin({str(x) for x in exclude_src})]
+    n_excluded = n_works - len(df)
+    day = (pd.to_datetime(df["pub_date"], format="%Y-%m-%d", errors="coerce") - pd.Timestamp("1970-01-01")).dt.days
+    n_listed = df["ref_ids"].map(len)
+    no_date = day.isna()
+    stats = {"n_works": int(n_works), "n_excluded": int(n_excluded), "n_no_date": int(no_date.sum()),
+             "n_without_refs": int((~no_date & (n_listed == 0)).sum())}
+    kept = df[~no_date]
+    reps = n_listed[~no_date].to_numpy()
+    src = np.repeat(kept["work_id"].astype(str).to_numpy(), reps)
+    t = np.repeat(day[~no_date].to_numpy(dtype=np.int64), reps)
+    dst = np.array([str(r) for lst in kept["ref_ids"] for r in lst], dtype=object)
+    out = pd.DataFrame({"event_id": np.arange(int(start_event_id), int(start_event_id) + len(src), dtype=np.int64),
+                        "src_id": src, "dst_id": dst, "t": t})
+    stats.update(n_rows=int(len(out)), n_ref_ids_dropped_no_date=int(n_listed[no_date].sum()))
+    return out, stats

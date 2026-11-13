@@ -215,3 +215,52 @@ def test_pull_text_is_the_default_and_unknown_what_is_refused(tmp_path):
     assert stats["what"] == "text" and "n_with_abstract" in stats
     with pytest.raises(ValueError, match="what"):
         pull_works_by_ids(["W0"], tmp_path / "b.parquet", what="citations", _fetch=FakeFetch(known))
+
+
+# ---- reference lists as context rows of the event table (2026-11-13)
+
+def _refs_frame():
+    return pd.DataFrame({
+        "work_id": ["X1", "X2", "X3", "W1"],
+        "pub_date": ["1970-01-11", None, "1970-01-21", "1970-01-05"],
+        "n_refs": [2, 1, 0, 1],
+        "ref_ids": [["R1", "R2"], ["R1"], [], ["R9"]],
+    })
+
+
+def test_reference_events_are_one_row_per_reference_at_the_citing_works_publication_day():
+    from citecurv.data.cited import reference_events
+
+    out, stats = reference_events(_refs_frame(), exclude_src=["W1"], start_event_id=100)
+    # X1 published on day 10 cites R1 and R2; X2 has no date (dropped); X3 has no references; W1 is excluded
+    assert list(out.columns) == ["event_id", "src_id", "dst_id", "t"]
+    assert out.to_dict("list") == {"event_id": [100, 101], "src_id": ["X1", "X1"], "dst_id": ["R1", "R2"], "t": [10, 10]}
+    assert out["t"].dtype == np.int64 and out["event_id"].dtype == np.int64
+    assert stats == {"n_works": 4, "n_excluded": 1, "n_no_date": 1, "n_without_refs": 1, "n_rows": 2,
+                     "n_ref_ids_dropped_no_date": 1}
+
+
+def test_reference_events_default_ids_start_at_zero_and_bad_dates_are_dropped():
+    from citecurv.data.cited import reference_events
+
+    refs = pd.DataFrame({"work_id": ["A", "B"], "pub_date": ["not a date", "1970-01-02"], "n_refs": [1, 1],
+                         "ref_ids": [["R1"], ["R2"]]})
+    out, stats = reference_events(refs)
+    assert out.to_dict("list") == {"event_id": [0], "src_id": ["B"], "dst_id": ["R2"], "t": [1]}
+    assert stats["n_no_date"] == 1 and stats["n_rows"] == 1
+
+
+def test_reference_events_make_the_forman_screen_see_the_cited_works_references():
+    # event W1 -> X1 at day 20; X1 (published day 10) has 2 references. Without context F = 2 - 0 - 0 = 2;
+    # with the reference rows as context F = 2 - 0 - 2 = 0. A reference row dated after the event must not count.
+    from citecurv.curvature.screen import forman_screen
+    from citecurv.data.cited import reference_events
+
+    events = pd.DataFrame({"event_id": [0, 1], "src_id": ["W1", "W1"], "dst_id": ["X1", "X3"], "t": [20, 20]})
+    refs = _refs_frame().assign(ref_ids=[["R1", "R2"], ["R1"], ["R5"], ["R9"]])   # X3 published day 20 + 1
+    refs.loc[refs.work_id == "X3", "pub_date"] = "1970-01-22"
+    ctx, _ = reference_events(refs, exclude_src=["W1"], start_event_id=int(events.event_id.max()) + 1)
+    alone = forman_screen(events).set_index("event_id")["forman"]
+    both = forman_screen(pd.concat([events, ctx], ignore_index=True)).set_index("event_id")["forman"]
+    assert alone.loc[0] == 2 and both.loc[0] == 0
+    assert both.loc[1] == 2                      # X3's reference row is at day 21, after the event at day 20
