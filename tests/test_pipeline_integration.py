@@ -14,6 +14,8 @@ Spec under test (citecurv.pipeline, CONTRACTS.md "Scores file", IMPLEMENTATION_P
 - Seeded double run -> byte-identical scores.parquet (sha256), the NFR4 hash compare.
 - Train-only fitting: shuffling test-period timestamps changes no threshold, z-statistic or weight.
 - Metrics come from eval.metrics.evaluate on non-cold-start test rows.
+- Cold-start rows carry a separate score, total_cold (2026-11-16): NaN on scored rows, built from
+  scoring.cold_start_components with statistics of cold train rows, with its own metrics (test_cold, val_cold).
 """
 
 import json
@@ -357,3 +359,114 @@ def test_evaluate_baseline_uses_the_models_scored_test_events(fx):
     scored_first = test.loc[~test["cold_start"], "event_id"].iloc[0]
     with pytest.raises(ValueError, match="no score"):
         evaluate_baseline(res, base[base["event_id"] != scored_first], fx["event_labels"])
+
+
+# --- cold-start rows get their own score (Maor's decision, 2026-11-16) ---------------------------
+# On the pilot k = 3 marked 448,181 of 606,129 events and 730 of 834 positive events as cold, while the
+# reference-overlap signal was present on those rows (PROGRESS.md session log 2026-11-16). Cold rows keep
+# total = NaN (the scored ranking, the gates and the baselines are unchanged) and get total_cold: a
+# combination of the components that need no history of the cited work (scoring.cold_start_components,
+# default s_geom alone), z-normalised on the cold TRAIN rows and reported apart from the scored rows.
+
+def _cold_reference(res, comps, weights):
+    """total_cold recomputed by hand: z on cold train rows (mean, population sd), NaN -> 0, weighted sum."""
+    s = res.scores
+    cold = s["cold_start"].to_numpy()
+    train_cold = cold & (res.split == "train").to_numpy()
+    total = np.zeros(int(cold.sum()))
+    n_fit = {}
+    for c in comps:
+        x = res.components[c].to_numpy(dtype=float)
+        fit = x[train_cold][np.isfinite(x[train_cold])]
+        n_fit[c] = int(fit.size)
+        z = (x[cold] - fit.mean()) / max(fit.std(), 1e-6)
+        total += weights[c] * np.where(np.isnan(z), 0.0, z)
+    return total, n_fit
+
+
+def test_cold_start_rows_get_a_separate_score_from_the_history_free_component(fx):
+    res = run(fx)
+    s = res.scores
+    cold = s["cold_start"].to_numpy()
+    assert cold.any() and (~cold).any()
+    assert str(s["total_cold"].dtype) == "float64"
+    assert s.loc[~cold, "total_cold"].isna().all()            # a scored row carries no cold score
+    assert np.isfinite(s.loc[cold, "total_cold"]).all()
+    assert s.loc[cold, "total"].isna().all() and np.isfinite(s.loc[~cold, "total"]).all()   # the main score is unchanged
+    info = res.metrics["cold_start_scoring"]
+    assert info["components"] == ["s_geom"] and info["weights"] == {"s_geom": 1.0}
+    want, n_fit = _cold_reference(res, ["s_geom"], {"s_geom": 1.0})
+    np.testing.assert_allclose(s.loc[cold, "total_cold"].to_numpy(), want, rtol=1e-12, atol=1e-12)
+    assert info["zstats"]["n_fit"] == n_fit and info["n_rows"] == int(cold.sum())
+    assert s.loc[cold, "total_cold"].nunique() > 1            # it ranks: not one constant
+
+
+def test_cold_start_metrics_are_reported_apart_from_the_scored_rows(fx):
+    from citecurv.eval.metrics import ranking_metrics
+
+    res = run(fx)
+    s = res.scores
+    lab = fx["event_labels"].set_index("event_id")["label"]
+    for part in ("test", "val"):
+        rows = (res.split == part).to_numpy()
+        cold = rows & s["cold_start"].to_numpy()
+        assert cold.any()
+        want = ranking_metrics(s.loc[cold, "total_cold"].to_numpy(),
+                               lab.reindex(s.loc[cold, "event_id"]).to_numpy().astype(np.int64), ks=(100, 1000))
+        np.testing.assert_equal(res.metrics[f"{part}_cold"], want)
+        assert res.metrics[f"{part}_cold"]["n"] + res.metrics[part]["n"] == int(rows.sum())   # every row in one table
+    assert res.metrics["test_cold"]["n_pos"] == res.metrics["test_n_pos_cold_start"]
+
+
+def test_cold_start_components_come_from_the_config(fx):
+    cfg = cfg_small()
+    cfg["scoring"]["cold_start_components"] = ["s_geom", "s_embed"]
+    res = run(fx, cfg=cfg)
+    info = res.metrics["cold_start_scoring"]
+    assert info["components"] == ["s_geom", "s_embed"] and info["weights"] == {"s_geom": 0.5, "s_embed": 0.5}
+    want, _ = _cold_reference(res, ["s_geom", "s_embed"], info["weights"])
+    cold = res.scores["cold_start"].to_numpy()
+    np.testing.assert_allclose(res.scores.loc[cold, "total_cold"].to_numpy(), want, rtol=1e-12, atol=1e-12)
+    assert res.config_hash != run(fx).config_hash               # the choice is part of the run's identity
+    cfg["scoring"]["cold_start_components"] = ["s_geom", "s_nope"]
+    with pytest.raises(ValueError, match="cold_start_components"):
+        run(fx, cfg=cfg)
+
+
+def test_cold_start_scoring_can_be_switched_off_and_follows_disabled_components(fx):
+    cfg = cfg_small()
+    cfg["scoring"]["cold_start_components"] = []                # the rule as first planned: cold rows unscored
+    off = run(fx, cfg=cfg)
+    assert off.scores["total_cold"].isna().all()
+    assert off.metrics["cold_start_scoring"]["components"] == [] and off.metrics["test_cold"] is None
+    base = run(fx)
+    pd.testing.assert_series_equal(off.scores["total"], base.scores["total"])   # the scored ranking does not move
+    nocurv = run(fx, variant="no_curvature")                    # s_geom is disabled in this cell
+    assert nocurv.scores["total_cold"].isna().all() and nocurv.metrics["test_cold"] is None
+    assert nocurv.metrics["cold_start_scoring"]["components"] == []
+    assert any("cold-start" in n for n in nocurv.metrics["notes"])
+
+
+def test_cold_start_score_is_fitted_on_training_rows_only_and_gated(fx):
+    base = run(fx)
+    ev = shuffle_test_timestamps(fx["events"], fx["meta"]["t_min"] - 1, seed=1)
+    shuf = run_pipeline(ev, fx["works"], embeddings=fx["embeddings"], event_labels=fx["event_labels"],
+                        cutoff=fx["meta"]["t_min"] - 1, variant="full", seed=0, cfg=cfg_small(), orc_fn=FakeORC())
+    assert shuf.metrics["cold_start_scoring"]["zstats"] == base.metrics["cold_start_scoring"]["zstats"]
+    assert gate_shuffle(base, shuf)["value"]["fitted_objects_identical"] is True
+    cs = gate_cold_start(base)
+    assert cs["status"] == "PASS" and cs["value"]["cold_total_only_on_cold"] is True
+    broken = run(fx)
+    scored_row = broken.scores.index[~broken.scores["cold_start"].to_numpy()][0]
+    broken.scores.loc[scored_row, "total_cold"] = 1.0           # a cold score leaking onto a scored row
+    assert gate_cold_start(broken)["status"] == "FAIL"
+    moved = run(fx)
+    moved.metrics["cold_start_scoring"]["zstats"]["center"]["s_geom"] += 1.0
+    assert gate_shuffle(base, moved)["value"]["fitted_objects_identical"] is False
+
+
+def test_shuffle_gate_compares_the_fitted_cold_start_objects_not_the_row_count(fx):
+    # shuffling test timestamps may change how many TEST rows are cold; that is not a fitted object
+    base, other = run(fx), run(fx)
+    other.metrics["cold_start_scoring"]["n_rows"] += 1
+    assert gate_shuffle(base, other)["value"]["fitted_objects_identical"] is True

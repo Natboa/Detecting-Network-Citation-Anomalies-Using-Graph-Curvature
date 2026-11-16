@@ -24,7 +24,10 @@
 Sanity gates for S3.4 / S4.3 (``gate_*``) and ``orc_memo_from_cache`` (reuse ORC values cached by the curvature
 stage) sit at the end of the module.
 6. ``combine``: total = sum_c w_c z_c; a NaN component contributes 0. Cold-start rows get total = NaN and are
-   excluded from fitting, calibration and metrics (CONTRACTS.md).
+   excluded from fitting, calibration and metrics (CONTRACTS.md). Since 2026-11-16 (Maor's decision) they get
+   a score of their own in the extra column ``total_cold`` (``cold_start_scores``: the components named in
+   ``scoring.cold_start_components``, default s_geom, z-normalised on cold train rows), NaN on scored rows,
+   with its own metrics (``test_cold``, ``val_cold``); the two rankings are never mixed.
 7. Scores frame per the scores.parquet contract, stamped (model_variant, seed, config_hash); written with
    ``aggregate.write_scores`` when ``out_dir`` is given, next to metrics.json, config.json, weights.json,
    zstats.json and thresholds.json.
@@ -173,6 +176,7 @@ def resolve_config(cfg=None, *, variant="full", seed=0) -> dict:
         },
         "scoring": {
             "cold_start_k": int(pick(sc.get("cold_start_k"), 3)),
+            "cold_start_components": _cold_start_components(sc.get("cold_start_components")),
             "weights": {c: float((sc.get("weights") or {}).get(c, 0.25)) for c in COMPONENTS},
             "zstats": {"robust": False, "std_floor": 1e-6, "exclude_cold_start": True, **(sc.get("zstats") or {})},
             "calibration": {"step": 0.1, "metric": "ap", **(sc.get("calibration") or {})},
@@ -388,6 +392,58 @@ def _rows(split, names):
     return np.isin(np.asarray(split), list(names))
 
 
+DEFAULT_COLD_START_COMPONENTS = ("s_geom",)
+
+
+def _cold_start_components(value) -> list:
+    """scoring.cold_start_components from a config: None -> the default (s_geom alone); a list of component
+    names, kept in the given order; [] switches cold-start scoring off."""
+    comps = list(DEFAULT_COLD_START_COMPONENTS if value is None else value)
+    unknown = [c for c in comps if c not in COMPONENTS]
+    if unknown or len(set(comps)) != len(comps):
+        raise ValueError(f"scoring.cold_start_components must be distinct names from {list(COMPONENTS)}; got {comps}")
+    return comps
+
+
+def cold_start_scores(comp, split, cold, components, cfg_weights, disabled=(), *, robust=False, std_floor=1e-6):
+    """A separate score for cold-start rows; returns (total_cold, info).
+
+    total_cold: float array aligned with `comp`, NaN on every row that is not cold-start. On cold rows it is
+    sum_c w_c * z_c over `components` (docs/score_components.md section 7): z_c uses the mean and sd of
+    component c on the cold TRAIN rows (a ZStats of its own, since a component's distribution on papers
+    without history differs from the scored rows), a NaN component contributes 0, and w is the config
+    weights renormalised over the components in use (`fixed_weights`; no calibration on labels).
+    A component is left out when it is disabled in this run or has no finite value on a cold train row;
+    with none left, total_cold is all-NaN and info["note"] says why.
+    info: components (in use), weights, zstats (ZStats.to_dict() or None), n_rows (cold rows), note.
+
+    Leak argument. The statistics read component values of cold train rows only and no label; whether a
+    train row is cold depends on events before it; the weights come from the config. So no validation or
+    test value reaches a cold score other than the row's own component values.
+    """
+    cold = np.asarray(cold, dtype=bool)
+    split = np.asarray(split)
+    total = np.full(len(comp), np.nan)
+    info = {"components": [], "weights": {}, "zstats": None, "n_rows": int(cold.sum()), "note": None}
+    if not components:
+        info["note"] = "cold-start scoring is off (scoring.cold_start_components is empty)"
+        return total, info
+    train_cold = cold & (split == "train")
+    usable = [c for c in components
+              if c not in disabled and np.isfinite(comp[c].to_numpy(dtype=float)[train_cold]).any()]
+    if not usable:
+        info["note"] = (f"cold-start rows are not scored: none of {list(components)} is enabled with a finite "
+                        "value on a cold-start training row")
+        return total, info
+    sub = comp.loc[cold]
+    zs = ZStats.fit(sub, usable, split=split[cold], robust=robust, std_floor=std_floor, exclude_cold_start=False)
+    w_all = fixed_weights(cfg_weights, usable)
+    weights = {c: float(w_all[c]) for c in usable}
+    total[cold] = combine(sub, weights, zs)["total"].to_numpy()
+    info.update(components=usable, weights=weights, zstats=zs.to_dict())
+    return total, info
+
+
 # ----------------------------------------------------------------- the run
 
 
@@ -520,9 +576,17 @@ def run_pipeline(events, works, *, authorships=None, embeddings=None, event_labe
     contrib_w = np.array([weights[c] for c in COMPONENTS])
     scored.loc[cold, "total"] = np.nan
 
+    # 6b. cold-start rows: their own score from the components that need no history of the cited work
+    total_cold, cold_info = cold_start_scores(comp, split, cold, rcfg["scoring"]["cold_start_components"],
+                                              rcfg["scoring"]["weights"], disabled, robust=zc["robust"],
+                                              std_floor=zc["std_floor"])
+    scored["total_cold"] = total_cold
+    if cold_info["note"]:
+        notes.append(cold_info["note"])
+
     # 7. scores frame (contract columns, stamp, extras)
     stamp = {"model_variant": variant, "seed": int(seed), "config_hash": chash}
-    extras = [f"z_{c}" for c in COMPONENTS] + ["n_components_used"]
+    extras = [f"z_{c}" for c in COMPONENTS] + ["n_components_used", "total_cold"]
     scores = scored[[c for c in SCORES_COLUMNS if c not in stamp] + extras].copy()
     for k, v in stamp.items():
         scores[k] = v
@@ -538,7 +602,7 @@ def run_pipeline(events, works, *, authorships=None, embeddings=None, event_labe
         "data_hash": dhash, "tags": dict(tags or {}),
         "cutoff_t": int(c_val), "cutoff_date": rcfg["split"]["cutoff_date_resolved"], "cutoff_rule": c_rule,
         "split_counts": split_counts(ev, split, labels_df if have_labels else None),
-        "n_cold_start": int(cold.sum()),
+        "n_cold_start": int(cold.sum()), "cold_start_scoring": cold_info,
         "embed_mode": embed_mode, "disabled_components": sorted(disabled), "enabled_components": enabled,
         "weights": weights, "weights_on_simplex": learned is None, "weights_source": weights_source,
         "learned": learned.to_dict() if learned is not None else None, "calibration": calibration,
@@ -551,13 +615,17 @@ def run_pipeline(events, works, *, authorships=None, embeddings=None, event_labe
             metrics[part] = evaluate(frame, labels_df, score_col="total", ks=ks)
             metrics[f"{part}_n_pos_all"] = int(y[mask].sum())
             metrics[f"{part}_n_pos_cold_start"] = int(y[mask & cold].sum())
+            # cold-start rows of the part, ranked by their own score: a table of its own, never mixed with `part`
+            m_cold = mask & cold
+            metrics[f"{part}_cold"] = (ranking_metrics(total_cold[m_cold], y[m_cold], ks=ks)
+                                       if cold_info["components"] and m_cold.any() else None)
         keep = test & ~cold
         metrics["test_components"] = {c: ranking_metrics(z[keep, i], y[keep], ks=ks)
                                       for i, c in enumerate(COMPONENTS) if c in enabled}
         metrics["test_top100_contribution"] = _top_contribution(scores.loc[keep, "total"].to_numpy(),
                                                                 z[keep] * contrib_w, y[keep], k=100)
     else:
-        metrics["test"] = metrics["val"] = None
+        metrics["test"] = metrics["val"] = metrics["test_cold"] = metrics["val_cold"] = None
     timings["total_s"] = time.perf_counter() - t_run
     metrics["timings"] = timings
 
@@ -657,18 +725,27 @@ def shuffle_test_timestamps(events, cutoff, seed=0) -> pd.DataFrame:
     return ev
 
 
+def _cold_fitted(metrics) -> dict:
+    """The fitted part of metrics["cold_start_scoring"]: components, weights, zstats (not the row count,
+    which depends on test-period timestamps)."""
+    info = metrics.get("cold_start_scoring") or {}
+    return {k: info.get(k) for k in ("components", "weights", "zstats")}
+
+
 def gate_shuffle(full: RunResult, shuffled: RunResult) -> dict:
     """PASS when the run on shuffled test timestamps kept every fitted object (thresholds, ZStats, weights)
     and its test ranking moved toward chance: |AUROC - 0.5| smaller than in the original run. AP is reported
     but not gated, because a model ranking below chance gains AP when its ranking is destroyed."""
     frozen = (shuffled.thresholds == full.thresholds and shuffled.zstats.to_dict() == full.zstats.to_dict()
-              and shuffled.weights == full.weights)
+              and shuffled.weights == full.weights
+              and _cold_fitted(shuffled.metrics) == _cold_fitted(full.metrics))
     a, s = full.metrics["test"], shuffled.metrics["test"]
     toward = abs(s["auroc"] - 0.5) < abs(a["auroc"] - 0.5)
     return gate(bool(frozen and toward),
                 {"ap_full": a["ap"], "ap_shuffled": s["ap"], "auroc_full": a["auroc"],
                  "auroc_shuffled": s["auroc"], "fitted_objects_identical": frozen},
-                "shuffled test timestamps: AUROC moves toward 0.5; thresholds, ZStats and weights unchanged")
+                "shuffled test timestamps: AUROC moves toward 0.5; thresholds, ZStats, weights and the "
+                "cold-start statistics unchanged")
 
 
 def gate_reproducibility(path_a, path_b) -> dict:
@@ -697,6 +774,8 @@ def gate_cold_start(result: RunResult, other_metrics=()) -> dict:
     checks = {
         "flag_matches_recount": bool(np.array_equal(cold, n_prior < k)),
         "total_nan_iff_cold": bool(np.array_equal(np.isnan(s["total"].to_numpy()), cold)),
+        "cold_total_only_on_cold": "total_cold" not in s.columns
+        or bool(np.isnan(s["total_cold"].to_numpy(dtype=float)[~cold]).all()),
         "test_n_matches": result.metrics.get("test") is None
         or result.metrics["test"]["n"] == int(((split == "test") & ~cold).sum()),
         "other_methods_same_n": all(m["test"]["n"] == result.metrics["test"]["n"] for m in other_metrics),
@@ -710,7 +789,7 @@ def gate_cold_start(result: RunResult, other_metrics=()) -> dict:
              "test_positives_cold_start": result.metrics.get("test_n_pos_cold_start")}
     return gate(all(checks.values()), value,
                 f"cold_start == (#citations of dst with ts < t) < k={k}; cold-start rows excluded from "
-                "z-statistics, totals and every method's metrics")
+                "z-statistics, totals and every method's metrics; their own score (total_cold) is on no scored row")
 
 
 def _field_lookup(works, field_col="field") -> pd.Series:

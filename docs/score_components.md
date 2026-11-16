@@ -22,7 +22,7 @@ adds them with calibrated weights (section 9). Nothing in this note uses labels.
 | D6 | s_temp statistic | Field-year z of x = ln((n_recent + 1) / (n_before + 1)) + ln(T_before / W): the cited paper's recent citation rate relative to its own earlier rate; W = 90 days | Raw burst count, or gap since the previous citation | Raw counts and gaps measure popularity: a highly cited paper always has many recent citations and short gaps. The ratio compares a paper with its own history. |
 | D7 | s_curvdyn regressor | Ridge regression on PCA-reduced endpoint vectors (32 dimensions per endpoint, 97 features), target asinh(Forman), fitted on train rows only; score = \|residual\| / train RMSE | Small MLP (closer to CurvGAD) | Closed form: deterministic to 1e-6 without GPU nondeterminism, cheap at 3M events. An MLP can replace it behind the same interface. |
 | D8 | Cold start | cold_start when the cited paper has fewer than k = 3 citation events with ts < t: its 1st, 2nd and 3rd citations are flagged, the 4th is the first scored | Score the k-th citation (rule "fewer than k - 1 prior") | Follows the data contract and L19 ("papers enter scoring after k events"). See the off-by-one note in section 7. |
-| D9 | Cold-start rows in the components frame | Components are still computed; the row carries `cold_start = True`; the combiner excludes it from totals, statistics and metrics | Write NaN components for cold-start rows | S2.4 needs component values on low-history events to pick k (stability against prior-event count). |
+| D9 | Cold-start rows in the components frame | Components are still computed; the row carries `cold_start = True`; the combiner excludes it from totals, statistics and metrics. **Changed 2026-11-16 (Maor):** cold-start rows also get a separate score, `total_cold`, from the components that need no history of the cited paper (section 7) | Write NaN components for cold-start rows | S2.4 needs component values on low-history events to pick k (stability against prior-event count). |
 | D10 | Missing or disabled components | NaN, never a filler value; the combiner treats NaN as z = 0 and gives a disabled component weight 0 | Impute a cell mean | NaN keeps "no evidence" distinct from "normal evidence" in the trace. |
 | D11 | `no_temporal` ablation | Changes the encoder only (DyGLib memory / time encoding off); s_temp stays on | Also turn s_temp off | The plan defines the cell as a static encoder. Turning s_temp off as well would test a different question (both temporal parts at once). Open question for Maor. |
 | D12 | z-statistics for model-based components | Fitted on train rows (contract) | Fit the s_embed (TGN) and s_curvdyn statistics on validation rows | On train rows both models are scored in-sample, so their train distributions sit slightly low and test z-scores slightly high (section 9). Open question for Maor. |
@@ -256,6 +256,32 @@ Cold-start rows keep their component values (D9; trace column `in_n_prior_dst` s
 They are excluded from totals, ranking, z-statistics, calibration and metrics, and included in TGN training and
 memory updates.
 
+**A separate score for cold-start rows (Maor's decision, 2026-11-16).** On the pilot, k = 3 marked 448,181 of
+606,129 events and 730 of the 834 positive events as cold (7 of the 218 cited-side positives stayed scored), while
+the reference-overlap signal was present on the cold rows: among events whose cited paper has a reference list,
+low overlap ranked the positives with AUC 0.663 on the cold rows (694 positives) and 0.619 on the scored rows (102).
+The pilot counts only citations made by its own 10,000 papers, so n_prior is an undercount there and the cold share
+on the full slice will be lower. The rule above therefore stays for `total`, and cold rows get a second column:
+
+total_cold(e) = sum over c in `scoring.cold_start_components` of w_c * z_c^cold, for cold rows; NaN on scored rows.
+
+- Components: default `[s_geom]`. s_geom reads the two papers' reference lists at time t and needs no earlier
+  citation of the cited paper. s_temp counts earlier citations, the TGN-based s_embed is weakest at 1 to 2 earlier
+  citations on the pilot (paired share 0.689, against 0.915 at none and 0.86 to 0.95 at 3 or more), and s_curvdyn
+  reads the TGN vectors; they stay out unless the config names them. `[]` switches the cold score off.
+- z_c^cold uses the mean and sd of component c on cold TRAIN rows (a ZStats of its own: the distribution of a
+  component on papers without history differs from the scored rows). A NaN component contributes 0.
+- w: the config weights renormalised over the components in use; no calibration on labels. A component that is
+  disabled in the run, or has no finite value on a cold train row, is left out; with none left, total_cold is NaN.
+- Reporting: `test_cold` and `val_cold` hold the ranking metrics of the cold rows by total_cold, next to `test` and
+  `val` for the scored rows. The two scores are on different scales and are never ranked together.
+- Leak argument: the statistics read cold train rows only and no label; whether a train row is cold depends on
+  earlier events only. `gate_shuffle` checks that these statistics do not move when test timestamps are shuffled,
+  and `gate_cold_start` that no scored row carries a total_cold.
+- Open: this departs from L19 as written ("papers enter scoring after k events"); it goes into the next update
+  to the advisors. k itself is still set in S2.4, on the full slice. With s_geom alone the cold score is as good
+  as the curvature stage's coverage of cold rows (ORC is computed on escalated events only; S2.3).
+
 ## 8. Ablation semantics (book 4.2.1, plan S4.3)
 
 | Variant | s_embed | s_geom | s_temp | s_curvdyn | Other stages |
@@ -277,7 +303,8 @@ cell's output unchanged. Disabled components are all-NaN and listed in `attrs["d
 ## 9. How the combiner consumes the components
 
 - Input: the components frame (`event_id, src_id, dst_id, t, s_embed, s_geom, s_temp, s_curvdyn, cold_start`).
-  Cold-start rows are excluded from everything below and get `total = NaN`.
+  Cold-start rows are excluded from everything below and get `total = NaN`; their own score is `total_cold`
+  (section 7), computed by `pipeline.cold_start_scores` with the same `combine` on a cold-row ZStats.
 - ZStats: per component, mean and sd over train rows that are not cold-start and not NaN; frozen and applied
   unchanged to validation and test (never refitted on test).
 - z_c = (s_c - mu_c) / sigma_c. A NaN component contributes z = 0 (no evidence either way); the number of
@@ -316,6 +343,7 @@ Proposed under `scoring:` in `configs/default.yaml` (not yet merged):
 ```yaml
 scoring:
   cold_start_k: 3              # provisional (L19), finalised in S2.4
+  cold_start_components: [s_geom]  # components of total_cold (section 7); [] leaves cold rows unscored
   components:
     embed_mode: auto           # auto | tgn | static_cosine (static_cosine = rehearsal before the TGN exists)
     window_days: 90            # s_temp trailing window W in days; provisional, sensitivity 30/365 in S3.4
