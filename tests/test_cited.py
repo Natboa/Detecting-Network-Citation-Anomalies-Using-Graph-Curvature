@@ -264,3 +264,93 @@ def test_reference_events_make_the_forman_screen_see_the_cited_works_references(
     both = forman_screen(pd.concat([events, ctx], ignore_index=True)).set_index("event_id")["forman"]
     assert alone.loc[0] == 2 and both.loc[0] == 0
     assert both.loc[1] == 2                      # X3's reference row is at day 21, after the event at day 20
+
+
+# ---- a finished pull is not downloaded again (2026-11-16). The parts folder is removed after the merge,
+# so before this a rerun with the output already on disk asked OpenAlex for every id a second time.
+
+def test_pull_by_ids_rerun_with_the_output_on_disk_makes_no_call(tmp_path):
+    import json
+
+    ids = [f"W{i:03d}" for i in range(5)]
+    known = {i: _work(i) for i in ids if i != "W002"}
+    out = tmp_path / "cited_works.parquet"
+    first = pull_works_by_ids(ids, out, batch_size=2, _fetch=FakeFetch(known))
+    assert first["calls"] == 3 and first["already_complete"] is False
+    assert not (tmp_path / "cited_works_parts").exists()
+    before = out.read_bytes()
+    again = FakeFetch(known)
+    stats = pull_works_by_ids(reversed(ids), out, batch_size=2, _fetch=again)
+    assert again.batches == []
+    assert stats["already_complete"] is True and stats["calls"] == 0 and stats["cost_usd_reported"] is None
+    for key in ("n_ids", "n_found", "n_missing", "n_with_abstract", "n_no_title", "what"):
+        assert stats[key] == first[key]
+    assert out.read_bytes() == before and not (tmp_path / "cited_works_parts").exists()
+    # the stats file keeps the record of the run that paid for the download
+    on_disk = json.loads((tmp_path / "cited_works_stats.json").read_text(encoding="utf-8"))
+    assert on_disk["calls"] == 3 and on_disk["cost_usd_reported"] == pytest.approx(0.0003)
+
+
+def test_a_finished_pull_builds_no_api_client(tmp_path, monkeypatch):
+    import citecurv.data.cited as cited
+
+    known = {"W0": _work("W0"), "W1": _work("W1")}
+    out = tmp_path / "cited_works.parquet"
+    pull_works_by_ids(["W0", "W1"], out, _fetch=FakeFetch(known))
+
+    def no_client(*args, **kwargs):
+        raise AssertionError("a client was built for a finished pull")
+
+    monkeypatch.setattr(cited, "_client_fetch_for", no_client)
+    stats = pull_works_by_ids(["W0", "W1"], out, config={"data": {}})   # no key needed, no network touched
+    assert stats["already_complete"] is True and stats["n_found"] == 2
+
+
+def _text_and_refs(i):
+    return {**_work(i), **_ref_work(i, ["R1"])}
+
+
+def test_pull_by_ids_fetches_again_for_another_id_list_what_or_select(tmp_path):
+    from citecurv.data.cited import REFERENCE_COLUMNS
+
+    known = {f"W{i}": _text_and_refs(f"W{i}") for i in range(4)}
+    out = tmp_path / "o.parquet"
+    pull_works_by_ids(["W0", "W1"], out, _fetch=FakeFetch(known))
+    other_ids = FakeFetch(known)
+    stats = pull_works_by_ids(["W0", "W2"], out, _fetch=other_ids)
+    assert other_ids.batches == [["W0", "W2"]] and stats["already_complete"] is False
+    assert list(pd.read_parquet(out).work_id) == ["W0", "W2"]
+    other_select = FakeFetch(known)
+    pull_works_by_ids(["W0", "W2"], out, select=("id", "title"), _fetch=other_select)
+    assert other_select.batches == [["W0", "W2"]]
+    other_what = FakeFetch(known)
+    pull_works_by_ids(["W0", "W2"], out, what="references", _fetch=other_what)
+    assert other_what.batches == [["W0", "W2"]]
+    assert list(pd.read_parquet(out).columns) == REFERENCE_COLUMNS
+
+
+def test_pull_by_ids_fetches_again_when_the_file_is_not_the_one_the_stats_describe(tmp_path):
+    import json
+
+    known = {f"W{i}": _work(f"W{i}") for i in range(3)}
+    out = tmp_path / "o.parquet"
+    stats_file = tmp_path / "o_stats.json"
+    pull_works_by_ids(["W0", "W1", "W2"], out, _fetch=FakeFetch(known))
+    # another file under the same name (here: fewer rows than the stats say)
+    pd.DataFrame({"work_id": ["W0"], "title": ["t"], "abstract": ["a"], "pub_date": ["2015-01-02"]}).to_parquet(out, index=False)
+    replaced = FakeFetch(known)
+    stats = pull_works_by_ids(["W0", "W1", "W2"], out, _fetch=replaced)
+    assert replaced.batches == [["W0", "W1", "W2"]] and stats["already_complete"] is False
+    assert list(pd.read_parquet(out).work_id) == ["W0", "W1", "W2"]
+    # a stats file written before the id hash was stored (the pilot's files) proves nothing about the id list
+    old = json.loads(stats_file.read_text(encoding="utf-8"))
+    del old["ids_sha256"]
+    stats_file.write_text(json.dumps(old), encoding="utf-8")
+    old_style = FakeFetch(known)
+    pull_works_by_ids(["W0", "W1", "W2"], out, _fetch=old_style)
+    assert old_style.batches == [["W0", "W1", "W2"]]
+    # an unreadable stats file is treated the same way
+    stats_file.write_text("{not json", encoding="utf-8")
+    broken = FakeFetch(known)
+    pull_works_by_ids(["W0", "W1", "W2"], out, _fetch=broken)
+    assert broken.batches == [["W0", "W1", "W2"]]

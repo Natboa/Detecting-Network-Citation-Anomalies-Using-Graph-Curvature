@@ -74,17 +74,31 @@ def _split_embeddings(node_emb):
     return ids, vectors
 
 
-def _pca_projection(fit_rows: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray, float]:
-    """Return (mean, components (d, k), explained variance share) of a PCA fitted on ``fit_rows``.
+DEFAULT_CHUNK_ROWS = 65536
 
-    Uses the d x d covariance (float64) rather than an SVD of the rows, so memory stays O(d^2)
-    on the full slice. Each component's sign is fixed (largest-magnitude entry positive) so the
-    output bytes do not depend on the eigensolver's sign choice.
+
+def _pca_fit(get_rows, n_rows: int, k: int, chunk_rows: int = DEFAULT_CHUNK_ROWS) -> tuple[np.ndarray, np.ndarray, float]:
+    """Return (mean, components (d, k), explained variance share) of a PCA over ``n_rows`` fit rows.
+
+    ``get_rows(lo, hi)`` returns fit rows lo..hi-1 as an (hi - lo, d) array; it is called for
+    consecutive ranges of at most ``chunk_rows`` rows, twice over (mean, then centred covariance),
+    so only one chunk is held as float64 at a time and the working memory is O(chunk_rows * d + d^2)
+    whatever ``n_rows`` is. Uses the d x d covariance (float64) rather than an SVD of the rows.
+    Each component's sign is fixed (largest-magnitude entry positive) so the output bytes do not
+    depend on the eigensolver's sign choice. With all rows in one chunk the arithmetic is that of
+    the first version (mean, x - mean, xc.T @ xc / (n - 1)); with several chunks only the order of
+    the float64 additions differs.
     """
-    x = fit_rows.astype(np.float64)
-    mean = x.mean(axis=0)
-    xc = x - mean
-    cov = xc.T @ xc / max(len(x) - 1, 1)
+    bounds = [(lo, min(lo + chunk_rows, n_rows)) for lo in range(0, n_rows, chunk_rows)]
+    total = 0.0
+    for lo, hi in bounds:
+        total = total + get_rows(lo, hi).astype(np.float64).sum(axis=0)
+    mean = total / n_rows
+    cov = 0.0
+    for lo, hi in bounds:
+        xc = get_rows(lo, hi).astype(np.float64) - mean
+        cov = cov + xc.T @ xc
+    cov = cov / max(n_rows - 1, 1)
     eigval, eigvec = np.linalg.eigh(cov)  # ascending
     order = np.argsort(eigval)[::-1][:k]
     comps = eigvec[:, order]
@@ -93,6 +107,31 @@ def _pca_projection(fit_rows: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarra
     total = float(np.clip(eigval, 0, None).sum())
     explained = float(np.clip(eigval[order], 0, None).sum() / total) if total > 0 else 1.0
     return mean, comps, explained
+
+
+def pca_fit_ids(events: pd.DataFrame, train_end_t):
+    """Works whose text may shape the PCA on a dated split, for ``to_jodie(fit_ids=...)``.
+
+    Both endpoints of every event with ``t <= train_end_t``, as a str array in order of first
+    appearance by (t, event_id), citing before cited. ``None`` for ``train_end_t`` returns ``None``
+    (no split dates: ``to_jodie`` then fits on every embedded work).
+
+    Leak argument. The citing work of such an event is published at t <= train_end_t. The cited
+    work is cited at t, so it existed by then and its title and abstract are older than the split
+    date; taking it adds no text from the validation or test period. This matters since cited
+    works carry text (decided 2026-11-12): on the pilot 299,539 of 309,425 nodes are cited-only
+    works. With the first 70 % of the pilot's events as training, a fit on citing works alone (the
+    notebook's rule until 2026-11-16) uses 7,189 works; this rule uses 232,209 (counted
+    2026-11-16). Works that appear only in later events stay out. A work
+    whose recorded publication date is later than an event that cites it (date errors, preprints)
+    is still taken: the rule goes by event time.
+    """
+    if train_end_t is None:
+        return None
+    tr = events.loc[events["t"] <= train_end_t, ["event_id", "src_id", "dst_id", "t"]]
+    tr = tr.sort_values(["t", "event_id"], kind="mergesort")
+    interleaved = np.column_stack([tr["src_id"].astype(str).to_numpy(), tr["dst_id"].astype(str).to_numpy()]).ravel()
+    return pd.unique(interleaved)
 
 
 def to_jodie(
@@ -105,6 +144,7 @@ def to_jodie(
     on_missing: str = "zero",
     reduce_to: int | None = None,
     fit_ids=None,
+    chunk_rows: int = DEFAULT_CHUNK_ROWS,
 ) -> dict:
     """Write the DyGLib dataset ``name`` for the citation events in ``edges_df``.
 
@@ -128,8 +168,13 @@ def to_jodie(
             means "the average fitted paper". Recorded in the meta as ``node_feat_reduction``.
         fit_ids: with ``reduce_to``, fit the PCA only on these works (those without an embedding
             or outside the graph are ignored). Pass the training-period works on a dated split so
-            the projection uses no text from validation or test papers; ``None`` fits on every
-            embedded work in the graph.
+            the projection uses no text from validation or test papers (``pca_fit_ids``); ``None``
+            fits on every embedded work in the graph.
+        chunk_rows: works per step when the node features are filled, and fit rows per step of the
+            PCA (see ``_pca_fit``). Beyond the embedding array itself and the output, memory is
+            one chunk, so millions of 768-d vectors fit (2026-11-16; the first version held two
+            float64 copies of every fit row and of every projected row). It changes no result
+            beyond float rounding, and nothing at all while the works fit in one chunk.
 
     Returns:
         The meta dict, also written to ``ml_{name}_meta.json``.
@@ -141,6 +186,9 @@ def to_jodie(
         raise ValueError("edges_df has duplicate event_id values")
     if on_missing not in ("zero", "raise"):
         raise ValueError("on_missing must be 'zero' or 'raise'")
+    chunk_rows = int(chunk_rows)
+    if chunk_rows < 1:
+        raise ValueError(f"chunk_rows must be >= 1; got {chunk_rows}")
 
     ev = edges_df.loc[:, list(REQUIRED_COLUMNS)].copy()
     ev["event_id"] = ev["event_id"].astype(np.int64)
@@ -188,20 +236,22 @@ def to_jodie(
         if absent.any() and on_missing == "raise":
             raise KeyError(f"no embedding for {int(absent.sum())} works, e.g. {list(work_ids[absent][:5])}")
         n_missing = int(absent.sum())
-        present = np.flatnonzero(~absent)
-        present_vecs = vectors[rows.to_numpy()[present].astype(np.int64)]
+        present = np.flatnonzero(~absent)                     # node positions (0-based) that have a vector
+        src_rows = rows.to_numpy()[present].astype(np.int64)  # their rows in `vectors`
+        mean = comps = None
+        out_dim = vectors.shape[1]
         if reduce_to is not None:
             k = int(reduce_to)
             if not 0 < k < vectors.shape[1]:
                 raise ValueError(f"reduce_to={reduce_to} must be between 1 and the width {vectors.shape[1]} (exclusive)")
-            in_fit = np.ones(len(present), dtype=bool)
+            fit_rows = src_rows
             if fit_ids is not None:
-                in_fit = np.isin(work_ids[present], np.asarray(list(fit_ids)).astype(str))
-            n_fit = int(in_fit.sum())
+                fit_rows = src_rows[np.isin(work_ids[present], np.asarray(list(fit_ids)).astype(str))]
+            n_fit = len(fit_rows)
             if k > n_fit:
                 raise ValueError(f"reduce_to={k} needs at least {k} fitted works; got {n_fit}")
-            mean, comps, explained = _pca_projection(present_vecs[in_fit], k)
-            present_vecs = ((present_vecs.astype(np.float64) - mean) @ comps).astype(np.float32)
+            mean, comps, explained = _pca_fit(lambda lo, hi: vectors[fit_rows[lo:hi]], n_fit, k, chunk_rows)
+            out_dim = k
             reduction = {
                 "method": "pca",
                 "from_dim": int(vectors.shape[1]),
@@ -210,8 +260,12 @@ def to_jodie(
                 "fit_restricted": fit_ids is not None,
                 "explained_variance": explained,
             }
-        node_feat = np.zeros((n_nodes + 1, present_vecs.shape[1]), dtype=np.float32)
-        node_feat[present + 1] = present_vecs
+        node_feat = np.zeros((n_nodes + 1, out_dim), dtype=np.float32)
+        for lo in range(0, len(present), chunk_rows):
+            block = vectors[src_rows[lo:lo + chunk_rows]]
+            if comps is not None:
+                block = ((block.astype(np.float64) - mean) @ comps).astype(np.float32)
+            node_feat[present[lo:lo + chunk_rows] + 1] = block
 
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)

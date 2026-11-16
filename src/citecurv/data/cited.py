@@ -24,7 +24,9 @@ Resumable pulls. The sorted id list is cut into parts of `ids_per_part`; each fi
 parquet file in `<out stem>_parts/` next to the output, with a manifest holding the hash of the
 id list. A rerun with the same ids asks only for the parts that are missing; a folder written
 for another id list is refused. When every part exists they are merged into `out_path` and the
-folder is removed (unless keep_parts).
+folder is removed (unless keep_parts). The stats file next to the output stores the same hash, so
+a rerun after the merge makes no call either (2026-11-16; before that it fetched everything again
+once the folder was gone).
 
 Leak note: this module acquires text and counts events; it computes no feature. A cited work's
 title and abstract are fixed at its publication, which precedes every citation of it, so using
@@ -222,6 +224,31 @@ def _atomic_parquet(df, path):
     tmp.replace(path)
 
 
+def _finished_pull(out_path, stats_path, request: dict):
+    """Stats of an earlier finished pull of the same `request` into `out_path`, or None.
+
+    `request` is what decides the file's content: ids_sha256, what, select. The pull counts as
+    finished only if the stats file names the same request and the parquet file holds the number of
+    rows the stats report (read from its footer). Anything else (no stats, stats written before the
+    id hash was stored, unreadable stats or parquet) returns None, and the caller fetches.
+    The returned dict has calls 0, cost_usd_reported None and already_complete True; the stats file
+    is left as the paying run wrote it.
+    """
+    if not (out_path.exists() and stats_path.exists()):
+        return None
+    try:
+        stored = json.loads(stats_path.read_text(encoding="utf-8"))
+        if not isinstance(stored, dict) or any(stored.get(k) != v for k, v in request.items()):
+            return None
+        import pyarrow.parquet as pq
+
+        if pq.ParquetFile(out_path).metadata.num_rows != stored.get("n_found"):
+            return None
+    except Exception:  # a broken stats or parquet file is no proof of a finished pull
+        return None
+    return {**stored, "calls": 0, "cost_usd_reported": None, "already_complete": True}
+
+
 def pull_works_by_ids(ids, out_path, *, config=None, batch_size: int = MAX_IDS_PER_REQUEST,
                       ids_per_part: int = 5000, id_filter: str = "openalex", select=None, what: str = "text",
                       keep_parts: bool = False, log=None, _fetch=None, _rate_limit=None, _sleep=None, _now=None) -> dict:
@@ -238,9 +265,14 @@ def pull_works_by_ids(ids, out_path, *, config=None, batch_size: int = MAX_IDS_P
     callable that gets one progress line per fetched part (e.g. print).
     Stats: n_ids, n_found, n_missing (ids OpenAlex did not return), n_with_abstract, n_no_title,
     n_other_id (returned records whose id was not asked for in that request, dropped), n_duplicate,
-    calls and cost_usd_reported of this call, parts, parts_reused. The same dict is written to
-    `<out stem>_stats.json`. Raises ApiKeyMissing without a key and BudgetExhausted on a spent
-    daily budget; finished parts stay on disk either way.
+    calls and cost_usd_reported of this call, parts, parts_reused, already_complete, ids_sha256,
+    select. The same dict is written to `<out stem>_stats.json`. Raises ApiKeyMissing without a key
+    and BudgetExhausted on a spent daily budget; finished parts stay on disk either way.
+
+    A finished pull is not fetched again: when `out_path` and its stats file exist for the same id
+    list, `what` and `select`, and the file has the row count the stats report, the stored stats
+    come back with calls 0, cost_usd_reported None and already_complete True, no client is built
+    and no file is written. The parts-folder check below does not run in that case.
     Test seams: _fetch(list of ids) -> response dict, _rate_limit, _sleep, _now.
     """
     from citecurv.data.openalex import _with_backoff
@@ -257,6 +289,14 @@ def pull_works_by_ids(ids, out_path, *, config=None, batch_size: int = MAX_IDS_P
         raise ValueError(f"what must be one of {sorted(_PROFILES)}, got {what!r}")
     default_select, columns, make_row, extra_stats = _PROFILES[what]
     select = default_select if select is None else select
+    out_path = Path(out_path)
+    stats_path = out_path.with_name(f"{out_path.stem}_stats.json")
+    request = {"ids_sha256": _ids_hash(ids), "what": what, "select": list(select)}
+    done = _finished_pull(out_path, stats_path, request)
+    if done is not None:
+        if log is not None:
+            log(f"{out_path.name} already holds this pull ({done['n_found']} of {done['n_ids']} ids); no call made")
+        return done
     if config is None and _fetch is None:
         from citecurv.config import load_config
 
@@ -266,11 +306,10 @@ def pull_works_by_ids(ids, out_path, *, config=None, batch_size: int = MAX_IDS_P
         fetch_for, _rate_limit = _client_fetch_for(data_cfg, select)
         _fetch = fetch_for(id_filter)
 
-    out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     part_dir = out_path.parent / f"{out_path.stem}_parts"
     manifest_path = part_dir / "manifest.json"
-    manifest = {"ids_sha256": _ids_hash(ids), "n_ids": len(ids), "ids_per_part": ids_per_part}
+    manifest = {"ids_sha256": request["ids_sha256"], "n_ids": len(ids), "ids_per_part": ids_per_part}
     if what != "text":  # text manifests keep their earlier form, so part folders written before still resume
         manifest["what"] = what
     if manifest_path.exists():
@@ -320,8 +359,9 @@ def pull_works_by_ids(ids, out_path, *, config=None, batch_size: int = MAX_IDS_P
     _write_frame(_part_frame(df, columns), out_path)
     stats = {"what": what, "n_ids": len(ids), "n_found": int(len(df)), "n_missing": int(len(ids) - len(df)),
              **extra_stats(df), **counts, "cost_usd_reported": cost, "parts": len(part_paths),
-             "batch_size": batch_size, "id_filter": id_filter}
-    out_path.with_name(f"{out_path.stem}_stats.json").write_text(json.dumps(stats, indent=1), encoding="utf-8")
+             "batch_size": batch_size, "id_filter": id_filter, "already_complete": False,
+             "ids_sha256": request["ids_sha256"], "select": request["select"]}
+    stats_path.write_text(json.dumps(stats, indent=1), encoding="utf-8")
     if not keep_parts:
         shutil.rmtree(part_dir, ignore_errors=True)
     return stats

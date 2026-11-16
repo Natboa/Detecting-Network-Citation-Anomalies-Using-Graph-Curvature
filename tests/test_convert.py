@@ -238,3 +238,107 @@ def test_no_reduction_recorded_by_default(converted):
 def test_reduce_to_without_embeddings_raises(tmp_path):
     with pytest.raises(ValueError, match="reduce_to"):
         to_jodie(EVENTS, None, tmp_path, "fx", node_feat_dim=4, reduce_to=2)
+
+
+# --- reduce_to on millions of vectors (2026-11-16) ---------------------------------------------
+# The first version held two float64 copies of every fit row (the rows and the centred rows) and
+# again of every projected row: 16 bytes per stored float32 value, on top of the array itself. The
+# fit now reads the rows in chunks (two passes: mean, then centred covariance) and the projection
+# is written chunk by chunk.
+
+def _structured_fixture(n=40, d=8, seed=1):
+    """n works with d-dim vectors whose variance falls off per direction (clear eigen-gaps), chained events."""
+    rng = np.random.default_rng(seed)
+    q = np.linalg.qr(rng.normal(size=(d, d)))[0]
+    scale = 1.0 / np.arange(1, d + 1)
+    vecs = (rng.normal(size=(n, d)) * scale @ q + 3.0).astype(np.float32)
+    ids = np.array([f"S{k:03d}" for k in range(n)])
+    events = pd.DataFrame({"event_id": np.arange(n - 1), "src_id": ids[1:], "dst_id": ids[:-1],
+                           "t": np.arange(n - 1) * 10})
+    return events, ids, vecs
+
+
+def test_pca_fit_reads_bounded_chunks_and_matches_the_textbook_fit():
+    from citecurv.tgn.convert import _pca_fit
+
+    _, _, x = _structured_fixture(n=50)
+    asked = []
+
+    def get_rows(lo, hi):
+        asked.append((lo, hi))
+        return x[lo:hi]
+
+    mean, comps, explained = _pca_fit(get_rows, len(x), 3, chunk_rows=16)
+    assert max(hi - lo for lo, hi in asked) <= 16                       # never more than a chunk in hand
+    assert sorted(asked) == sorted([(0, 16), (16, 32), (32, 48), (48, 50)] * 2)   # two passes over every row
+    x64 = x.astype(np.float64)
+    w, v = np.linalg.eigh(np.cov(x64, rowvar=False))
+    top = np.argsort(w)[::-1][:3]
+    np.testing.assert_allclose(mean, x64.mean(axis=0), rtol=1e-12)
+    np.testing.assert_allclose(np.abs(comps.T @ v[:, top]), np.eye(3), atol=1e-9)   # same axes, up to sign
+    assert explained == pytest.approx(w[top].sum() / w.sum(), rel=1e-9)
+    assert (comps[np.abs(comps).argmax(axis=0), np.arange(3)] > 0).all()            # the sign rule still holds
+
+
+def test_reduce_to_in_small_chunks_gives_the_same_features(tmp_path):
+    events, ids, vecs = _structured_fixture()
+    a, b = tmp_path / "a", tmp_path / "b"
+    meta_a = to_jodie(events, (ids, vecs), a, "ch", reduce_to=3)
+    meta_b = to_jodie(events, (ids, vecs), b, "ch", reduce_to=3, chunk_rows=7)
+    na, nb = np.load(a / "ml_ch_node.npy"), np.load(b / "ml_ch_node.npy")
+    assert na.shape == nb.shape == (41, 3)
+    # only the order of float64 additions differs between chunk sizes: a few float32 rounding steps at most
+    tol = 8 * np.finfo(np.float32).eps * float(np.abs(na).max())
+    np.testing.assert_allclose(nb, na, rtol=0, atol=tol)
+    ra, rb = meta_a["node_feat_reduction"], meta_b["node_feat_reduction"]
+    assert ra["n_fit"] == rb["n_fit"] == 40
+    assert rb["explained_variance"] == pytest.approx(ra["explained_variance"], rel=1e-9)
+
+
+def test_reduce_to_one_chunk_equals_the_one_shot_formula(tmp_path):
+    # with every row in one chunk the bytes are those of the first version: centre, covariance, eigh, project
+    events, ids, vecs = _structured_fixture()
+    to_jodie(events, (ids, vecs), tmp_path, "os", reduce_to=3)
+    nodes, _ = load_idmap(tmp_path, "os")
+    x = vecs[pd.Series(np.arange(len(ids)), index=ids).loc[nodes.work_id].to_numpy()].astype(np.float64)
+    mean = x.mean(axis=0)
+    xc = x - mean
+    w, v = np.linalg.eigh(xc.T @ xc / (len(x) - 1))
+    comps = v[:, np.argsort(w)[::-1][:3]]
+    flip = np.sign(comps[np.abs(comps).argmax(axis=0), np.arange(3)])
+    expected = ((x - mean) @ (comps * flip)).astype(np.float32)
+    np.testing.assert_array_equal(np.load(tmp_path / "ml_os_node.npy")[1:], expected)
+
+
+def test_chunk_rows_must_be_positive(tmp_path):
+    events, ids, vecs = _structured_fixture()
+    with pytest.raises(ValueError, match="chunk_rows"):
+        to_jodie(events, (ids, vecs), tmp_path, "ch", reduce_to=3, chunk_rows=0)
+
+
+# --- which works may shape the PCA on a dated split (2026-11-16) --------------------------------
+# Notebook 40_tgn fitted on the citing works of training-period events only. With cited works'
+# text in the graph (decided 2026-11-12) most nodes are cited-only works, so the fit set is both
+# endpoints of every training-period event: a cited work exists before the event that cites it.
+
+def test_pca_fit_ids_are_both_endpoints_of_training_period_events():
+    from citecurv.tgn.convert import pca_fit_ids
+
+    ev = pd.DataFrame({"event_id": [1, 2, 3, 4], "src_id": ["A", "B", "C", "D"],
+                       "dst_id": ["X", "A", "Y", "X"], "t": [10, 20, 30, 40]})
+    assert sorted(pca_fit_ids(ev, 20)) == ["A", "B", "X"]        # the event on the boundary day is training
+    assert sorted(pca_fit_ids(ev, 30)) == ["A", "B", "C", "X", "Y"]
+    assert len(pca_fit_ids(ev, 5)) == 0                          # nothing before the first event
+    assert pca_fit_ids(ev, None) is None                         # no split dates: to_jodie fits on every work
+    shuffled = ev.sample(frac=1, random_state=2)
+    assert list(pca_fit_ids(shuffled, 30)) == list(pca_fit_ids(ev, 30))   # same order whatever the row order
+
+
+def test_pca_fit_ids_let_cited_only_works_into_the_fit(tmp_path):
+    from citecurv.tgn.convert import pca_fit_ids
+
+    events, ids, vecs = _planar_fixture()      # P1->P0 (t=10), P2->P1 (20), P3->P2 (30), P4->P3, P5->P4, P0->MISSING
+    fit = pca_fit_ids(events, 30)              # training events: the first three; P0 is cited only in them
+    assert sorted(fit) == ["P0", "P1", "P2", "P3"]
+    meta = to_jodie(events, (ids, vecs), tmp_path, "rd", reduce_to=2, fit_ids=fit)
+    assert meta["node_feat_reduction"]["n_fit"] == 4 and meta["node_feat_reduction"]["fit_restricted"] is True
