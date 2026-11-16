@@ -251,6 +251,31 @@ def label_vector(event_ids, event_labels) -> np.ndarray:
     return y.astype(np.int64)
 
 
+SOURCE_COLUMNS = ("via_src", "via_dst")
+NO_SOURCE_NOTE = ("event_labels has no via_src / via_dst columns: no results by label source or per paper "
+                  "(ledger G10)")
+
+
+def label_sources(event_ids, event_labels):
+    """(via_src, via_dst) 0/1 vectors per event id, or None when event_labels lacks those columns (labels
+    of synthetic injections, or files written before 2026-11-17). Ids missing from event_labels count as 0."""
+    if event_labels is None or any(c not in event_labels.columns for c in SOURCE_COLUMNS):
+        return None
+    ids = np.asarray(event_ids, dtype=np.int64)
+    by_id = event_labels.set_index(event_labels["event_id"].to_numpy(dtype=np.int64))
+    return tuple(by_id[c].reindex(ids).fillna(0).to_numpy().astype(np.int64) for c in SOURCE_COLUMNS)
+
+
+def _views(score, y, sources, ev, rows, ks):
+    """eval.metrics.label_views on the rows of a mask (None when there are no source columns or no rows)."""
+    from citecurv.eval.metrics import label_views
+
+    if sources is None or not rows.any():
+        return None
+    return label_views(np.asarray(score, dtype=float)[rows], y[rows], sources[0][rows], sources[1][rows],
+                       ev["src_id"].to_numpy()[rows], ev["dst_id"].to_numpy()[rows], ks=ks)
+
+
 def cutoff_by_share(events, test_share) -> int:
     """Latest event time c such that events with t > c make up at least test_share of all events."""
     t = np.sort(events["t"].to_numpy(dtype=np.int64))
@@ -477,6 +502,7 @@ def run_pipeline(events, works, *, authorships=None, embeddings=None, event_labe
     ev = _canonical_events(events)
     y = label_vector(ev["event_id"].to_numpy(), event_labels)
     labels_df = pd.DataFrame({"event_id": ev["event_id"].to_numpy(), "label": y})
+    sources = label_sources(ev["event_id"].to_numpy(), event_labels)
 
     # 1. split
     c_val, c_rule = resolve_cutoff(ev, labels_df if event_labels is not None else None, rcfg, cutoff)
@@ -610,22 +636,30 @@ def run_pipeline(events, works, *, authorships=None, embeddings=None, event_labe
     }
     if have_labels:
         test = split == "test"
+        if sources is None:
+            notes.append(NO_SOURCE_NOTE)
+        total = scores["total"].to_numpy()
         for part, mask in (("test", test), ("val", split == "val")):
             frame = scores.loc[mask, ["event_id", "total", "cold_start"]]
             metrics[part] = evaluate(frame, labels_df, score_col="total", ks=ks)
             metrics[f"{part}_n_pos_all"] = int(y[mask].sum())
             metrics[f"{part}_n_pos_cold_start"] = int(y[mask & cold].sum())
+            # the same list by label source and per paper (ledger G10), next to the total, never instead of it
+            metrics[f"{part}_views"] = _views(total, y, sources, ev, mask & ~cold, ks)
             # cold-start rows of the part, ranked by their own score: a table of its own, never mixed with `part`
             m_cold = mask & cold
-            metrics[f"{part}_cold"] = (ranking_metrics(total_cold[m_cold], y[m_cold], ks=ks)
-                                       if cold_info["components"] and m_cold.any() else None)
+            has_cold = bool(cold_info["components"]) and bool(m_cold.any())
+            metrics[f"{part}_cold"] = ranking_metrics(total_cold[m_cold], y[m_cold], ks=ks) if has_cold else None
+            metrics[f"{part}_cold_views"] = _views(total_cold, y, sources, ev, m_cold, ks) if has_cold else None
         keep = test & ~cold
         metrics["test_components"] = {c: ranking_metrics(z[keep, i], y[keep], ks=ks)
                                       for i, c in enumerate(COMPONENTS) if c in enabled}
         metrics["test_top100_contribution"] = _top_contribution(scores.loc[keep, "total"].to_numpy(),
                                                                 z[keep] * contrib_w, y[keep], k=100)
     else:
-        metrics["test"] = metrics["val"] = metrics["test_cold"] = metrics["val_cold"] = None
+        for key in ("test", "val", "test_cold", "val_cold", "test_views", "val_views", "test_cold_views",
+                    "val_cold_views"):
+            metrics[key] = None
     timings["total_s"] = time.perf_counter() - t_run
     metrics["timings"] = timings
 
@@ -686,9 +720,25 @@ def evaluate_baseline(result: RunResult, scores: pd.DataFrame, event_labels, ks=
     return evaluate(df, labels, score_col="score", ks=tuple(ks or result.config["eval"]["top_k"]))
 
 
-def baseline_record(result: RunResult, kind: str, method: str, test: dict, tags=None) -> dict:
-    """metrics.json content for a baseline or control evaluated with evaluate_baseline (eval.ablation.write_run)."""
-    return {"kind": kind, "method": method, "seed": result.seed, "test": test, "tags": dict(tags or {}),
+def baseline_views(result: RunResult, scores: pd.DataFrame, event_labels, ks=None):
+    """eval.metrics.label_views of a baseline frame (event_id, score) on the same rows as evaluate_baseline:
+    the scored test events of the model run, in canonical order (ledger G10). None when event_labels has no
+    via_src / via_dst columns. Raises when a scored test event has no score."""
+    keep = (result.split == "test").to_numpy() & ~result.scores["cold_start"].to_numpy(dtype=bool)
+    df = result.scores.loc[keep, ["event_id", "src_id", "dst_id"]].merge(scores[["event_id", "score"]],
+                                                                         on="event_id", how="left")
+    if df["score"].isna().any():
+        raise ValueError(f"{int(df['score'].isna().sum())} scored test events have no score")
+    ids = df["event_id"].to_numpy()
+    return _views(df["score"].to_numpy(), label_vector(ids, event_labels), label_sources(ids, event_labels), df,
+                  np.ones(len(df), dtype=bool), tuple(ks or result.config["eval"]["top_k"]))
+
+
+def baseline_record(result: RunResult, kind: str, method: str, test: dict, tags=None, views=None) -> dict:
+    """metrics.json content for a baseline or control evaluated with evaluate_baseline (eval.ablation.write_run).
+    views: the baseline_views result for the same frame (None when there are no source columns)."""
+    return {"kind": kind, "method": method, "seed": result.seed, "test": test, "test_views": views,
+            "tags": dict(tags or {}),
             "data_hash": result.data_hash, "config_hash": None,
             "test_n_pos_all": result.metrics.get("test_n_pos_all"),
             "test_n_pos_cold_start": result.metrics.get("test_n_pos_cold_start")}

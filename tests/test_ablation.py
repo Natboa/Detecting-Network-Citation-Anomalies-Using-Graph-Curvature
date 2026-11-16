@@ -193,3 +193,96 @@ def test_bundle_slims_nested_metrics(tmp_path):
     assert back["test_top100_contribution"] == {"k": 100, "n_pos": 3, "mean_contribution": {"s_geom": 0.2}}
     comp = A.tables([r])["components"]
     assert row(comp, component="s_geom")["AUROC alone"] == "0.600"
+
+
+# ---------------------------------------------------------------- label sources, per paper, cold-start (G10, G11)
+
+def _m(ap, auroc, n=100, n_pos=4, found=2):
+    return {"n": n, "n_pos": n_pos, "auroc": auroc, "ap": ap, "p_at_100": found / 100, "found_at_100": found,
+            "p_at_1000": found / 1000, "found_at_1000": found}
+
+
+def _views(ap):
+    return {"citing_side": _m(ap, 0.8, n_pos=3), "cited_side": _m(ap / 2, 0.6, n_pos=1),
+            "per_citing_paper": _m(ap + 0.1, 0.9, n=40, n_pos=2), "per_cited_paper": _m(ap, 0.7, n=60, n_pos=1)}
+
+
+VIEW_RECORDS = [
+    rec("full", 0, 0.30, 0.90, test_views=_views(0.2), test_cold=_m(0.10, 0.65, n=500, n_pos=9),
+        test_cold_views=_views(0.1)),
+    rec("full", 1, 0.40, 0.92, test_views=_views(0.4), test_cold=_m(0.20, 0.75, n=520, n_pos=11),
+        test_cold_views=_views(0.3)),
+    rec("xgb", 0, 0.10, 0.70, kind="baseline", test_views=_views(0.05)),
+    rec("dst_age", 0, 0.05, 0.95, kind="control", test_views=None),      # labels without source columns
+    rec("shuffle_full", 0, 0.02, 0.55, kind="sanity", test_views=_views(0.01)),
+]
+
+
+def test_label_views_table_shows_the_sources_and_papers_next_to_the_total():
+    t = A.tables(VIEW_RECORDS)["label_views"]
+    sd = math.sqrt(2 * 0.1 ** 2)  # sample sd of two values 0.2 apart
+    full = t[(t["method"] == "full") & (t["rows"] == "scored")]
+    assert list(full["view"]) == ["all", "citing_side", "cited_side", "per_citing_paper", "per_cited_paper"]
+    assert row(full, view="all")["AP"] == f"0.350 ± {math.sqrt(2 * 0.05 ** 2):.3f}"       # the `test` numbers
+    assert row(full, view="citing_side")["AP"] == f"0.300 ± {sd:.3f}"
+    assert row(full, view="cited_side")["AP"] == f"0.150 ± {sd / 2:.3f}"
+    assert row(full, view="per_citing_paper")["n"] == 40.0 and row(full, view="per_citing_paper")["n_pos"] == 2.0
+    assert row(full, view="citing_side")["n_seeds"] == 2 and row(full, view="citing_side")["AUROC"] == "0.800 ± 0.000"
+    assert row(t, method="xgb", rows="scored", view="cited_side")["AP"] == "0.025"
+    assert row(t, method="xgb", rows="scored", view="all")["kind"] == "baseline"
+
+
+def test_label_views_table_gives_cold_start_rows_their_own_lines():
+    t = A.tables(VIEW_RECORDS)["label_views"]
+    cold = t[(t["method"] == "full") & (t["rows"] == "cold-start")]
+    assert list(cold["view"]) == ["all", "citing_side", "cited_side", "per_citing_paper", "per_cited_paper"]
+    assert row(cold, view="all")["AP"] == f"0.150 ± {math.sqrt(2 * 0.05 ** 2):.3f}"      # the `test_cold` numbers
+    assert row(cold, view="all")["n_pos"] == 10.0 and row(cold, view="all")["n"] == 510.0
+    assert row(cold, view="citing_side")["AP"] == f"0.200 ± {math.sqrt(2 * 0.1 ** 2):.3f}"
+    assert t[(t["method"] == "xgb") & (t["rows"] == "cold-start")].empty                # baselines have no cold score
+
+
+def test_label_views_table_skips_runs_without_views_and_sanity_runs():
+    t = A.tables(VIEW_RECORDS)["label_views"]
+    assert "dst_age" not in set(t["method"]) and "shuffle_full" not in set(t["method"])
+    assert A.tables(RECORDS)["label_views"].empty      # older records: no views, no cold-start metrics
+
+
+def test_label_views_table_survives_the_bundle(tmp_path):
+    A.write_bundle(VIEW_RECORDS, tmp_path / "b.jsonl")
+    back = A.tables(tmp_path / "b.jsonl")["label_views"]
+    pd.testing.assert_frame_equal(back, A.tables(VIEW_RECORDS)["label_views"])
+    out = tmp_path / "t"
+    A.write_tables(A.tables(VIEW_RECORDS), out)
+    md = (out / "tables.md").read_text(encoding="utf-8")
+    assert "label source" in md and "cold-start" in md and (out / "label_views.csv").is_file()
+
+
+def test_label_views_table_from_pipeline_runs_on_the_fixture(tmp_path):
+    """End to end without the learned cell (it needs sklearn): pipeline -> metrics.json -> tables -> files."""
+    from test_pipeline_integration import FakeORC, _with_sources, cfg_small
+
+    fx = load_fixture()
+    data = {"events": fx["events"], "works": fx["works"], "embeddings": fx["embeddings"],
+            "event_labels": _with_sources(fx["event_labels"]), "cutoff": fx["meta"]["t_min"] - 1}
+    metrics = A.run_matrix(["full", "no_curvature"], [0, 1], data, tmp_path, cfg=cfg_small(), orc_fn=FakeORC(),
+                           tags={"level": "fixture", "synthetic": True})
+    t = A.tables(tmp_path)["label_views"]
+    full = t[t["method"] == "full"]
+    assert list(full["rows"]) == ["scored"] * 5 + ["cold-start"] * 5
+    assert list(full[full["rows"] == "scored"]["view"]) == list(A.VIEW_ORDER)
+    m0 = next(m for m in metrics if m["variant"] == "full" and m["seed"] == 0)
+    m1 = next(m for m in metrics if m["variant"] == "full" and m["seed"] == 1)
+    for rows, total, views in (("scored", "test", "test_views"), ("cold-start", "test_cold", "test_cold_views")):
+        got = row(full, rows=rows, view="all")
+        assert got["n"] == round((m0[total]["n"] + m1[total]["n"]) / 2, 1) and got["n_seeds"] == 2
+        side = row(full, rows=rows, view="citing_side")
+        assert side["n_pos"] == round((m0[views]["citing_side"]["n_pos"] + m1[views]["citing_side"]["n_pos"]) / 2, 1)
+        assert row(full, rows=rows, view="cited_side")["n_pos"] + side["n_pos"] == got["n_pos"]
+    # no_curvature switches s_geom off, so it has no cold-start score and no cold-start lines
+    assert set(t[t["method"] == "no_curvature"]["rows"]) == {"scored"}
+    out = tmp_path / "tables"
+    assert A.main(["--tables", str(tmp_path), "--out", str(out), "--bundle", str(tmp_path / "b.jsonl")]) == 0
+    assert A.main(["--tables", str(tmp_path / "b.jsonl"), "--out", str(tmp_path / "tables2")]) == 0
+    assert (out / "label_views.csv").read_bytes() == (tmp_path / "tables2" / "label_views.csv").read_bytes()
+    assert (out / "tables.md").read_bytes() == (tmp_path / "tables2" / "tables.md").read_bytes()

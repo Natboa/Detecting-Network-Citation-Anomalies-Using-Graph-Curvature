@@ -177,7 +177,7 @@ def run_matrix(variants, seeds, data, out_dir, *, cfg=None, orc_fn=None, tags=No
 
 BUNDLE_KEYS = ("kind", "method", "seed", "tags", "config_hash", "data_hash", "test", "test_n_pos_all",
                "test_n_pos_cold_start", "weights_source", "weights", "test_components", "test_top100_contribution",
-               "gates", "note")
+               "test_views", "test_cold", "test_cold_views", "gates", "note")
 EXTRA_GROUPS = ("tgn_extra", "repro")  # run groups reported outside the matrix tables
 
 
@@ -318,6 +318,35 @@ def _summary_rows(df, methods, key):
     return rows
 
 
+VIEW_ORDER = ("all", "citing_side", "cited_side", "per_citing_paper", "per_cited_paper")
+VIEW_METRICS = (("auroc", "AUROC"), ("ap", "AP"), ("p_at_100", "P@100"))
+
+
+def _label_view_rows(recs, key, method):
+    """Rows of the label_views table for the runs of one method: the scored test events by label source and per
+    paper next to their total (only when the run has views; the total alone is in the main table), then the
+    cold-start test events, ranked by their own score, the same way (whenever the run has test_cold)."""
+    rows = []
+    for label, total_key, views_key, need in (("scored", "test", "test_views", "test_views"),
+                                              ("cold-start", "test_cold", "test_cold_views", "test_cold")):
+        use = [r for r in recs if r.get(need)]
+        for view in VIEW_ORDER if use else ():
+            dicts = [r.get(total_key) if view == "all" else (r.get(views_key) or {}).get(view) for r in use]
+            dicts = [d for d in dicts if d]
+            if not dicts:
+                continue
+            row = {**key, "method": method, "kind": use[0]["kind"], "rows": label, "view": view,
+                   "n_seeds": len(dicts)}
+            for col in ("n", "n_pos"):
+                mean, _, n = _ms([d.get(col) for d in dicts])
+                row[col] = round(mean, 1) if n else np.nan
+            for col, name in VIEW_METRICS:
+                mean, sd, n = _ms([d.get(col) for d in dicts])
+                row[name] = _fmt(mean, sd, n)
+            rows.append(row)
+    return rows
+
+
 def _compact(value, max_len=220):
     if isinstance(value, dict):
         value = {k: (f"<{len(v)} items>" if isinstance(v, list) and len(v) > 5 else v) for k, v in value.items()}
@@ -333,7 +362,9 @@ def tables(source, *, control_method="dst_age") -> dict:
     source: folder of runs (runs/<name>/metrics.json files), a .jsonl bundle, or a list of metrics dicts.
     Rows are keyed by (group, level): group is the run setting (tags["group"], default "matrix"; e.g. a fixed-
     weights sensitivity setting) and level the data condition (tags["level"]). Tables: runs (long form), main
-    (model vs baselines vs controls), ablation (variants with paired deltas vs full), curvature_delta (full
+    (model vs baselines vs controls), label_views (per method: the test metrics by label source and per paper
+    next to the total, and the cold-start rows on their own lines), ablation (variants with paired deltas vs
+    full), curvature_delta (full
     minus no_curvature, book test iii), obviousness (recall@k of full per level, S4.5), learned_vs_fixed (L13),
     components (which component carries the signal in full), shuffle (timestamp-shuffle line), gates (sanity
     gates PASS/FAIL), extra (groups in EXTRA_GROUPS, e.g. the single TGN run). Paired deltas match runs by
@@ -347,10 +378,14 @@ def tables(source, *, control_method="dst_age") -> dict:
     mat = runs[~runs["group"].isin(EXTRA_GROUPS) & (runs["kind"] != "sanity")]
     keys = sorted(set(zip(mat["group"], mat["level"])), key=lambda k: _key_rank(*k))
 
-    main, abl, delta, obv, lvf, comp = [], [], [], [], [], []
+    main, abl, delta, obv, lvf, comp, views = [], [], [], [], [], [], []
     for group, level in keys:
         key = {"group": group, "level": level}
         d = mat[(mat["group"] == group) & (mat["level"] == level)]
+        in_key = [r for r in records if r["kind"] != "sanity" and _group(r) == group
+                  and (r.get("tags") or {}).get("level", "") == level]
+        for m in _method_order(d):
+            views += _label_view_rows([r for r in in_key if r["method"] == m], key, m)
         others = [m for m in _method_order(d) if m not in VARIANTS]
         base = _summary_rows(d, others, key)
         base.sort(key=lambda r: -np.nan_to_num(r.get("_ap_mean", np.nan), nan=-1.0))
@@ -433,6 +468,7 @@ def tables(source, *, control_method="dst_age") -> dict:
             lvf.append(row)
 
     out["main"] = pd.DataFrame(main)
+    out["label_views"] = pd.DataFrame(views)
     out["ablation"] = pd.DataFrame(abl)
     out["curvature_delta"] = pd.DataFrame(delta)
     out["obviousness"] = pd.DataFrame(obv)
@@ -506,6 +542,11 @@ def _md_table(df: pd.DataFrame) -> str:
 
 TABLE_TITLES = {
     "main": "Main comparison: full model vs baselines and trivial controls (test events, mean ± sd over seeds)",
+    "label_views": ("Results by label source and per paper, next to the total (ledger G10). rows = scored: the "
+                    "test events of the main table; rows = cold-start: the cold-start test events ranked by their "
+                    "own score (G11), never mixed with the scored ones. citing_side / cited_side: the positives "
+                    "labelled through the citing / only the cited paper against the same negatives; per_*_paper: "
+                    "one row per paper, score = mean over its events (n and n_pos count papers)"),
     "ablation": "Ablation: variants with paired deltas vs full (same data realisation per seed)",
     "curvature_delta": ("Curvature-removal delta: full minus no_curvature (book test iii). Verdict rule: outside seed "
                         "noise when every per-seed delta has the same sign and |mean delta| exceeds the larger "

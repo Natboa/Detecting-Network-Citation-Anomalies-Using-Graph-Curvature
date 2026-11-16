@@ -282,6 +282,27 @@ total_cold(e) = sum over c in `scoring.cold_start_components` of w_c * z_c^cold,
   to the advisors. k itself is still set in S2.4, on the full slice. With s_geom alone the cold score is as good
   as the curvature stage's coverage of cold rows (ORC is computed on escalated events only; S2.3).
 
+**Results by label source and per paper (Maor's decision, 2026-11-16, ledger G10; built 2026-11-17).** Reporting
+only: no score, weight or label changes.
+
+- The label frame names the source: `event_labels_from_rwdb` returns `via_src` and `via_dst` next to `label`
+  (the citing paper, the cited paper is labelled; label = via_src OR via_dst).
+- `eval.metrics.label_views` reads one ranked list four more ways. citing_side: the positives labelled through
+  the citing paper (events labelled on both sides included) against the negatives; cited_side: the positives
+  labelled through the cited paper only, against the same negatives (the two sources are disjoint and add up to
+  all positives). per_citing_paper and per_cited_paper: one row per paper, score = mean score of its events in
+  the list, positive when that paper is labelled; n and n_pos count papers.
+- In a run: `metrics["test_views"]`, `["val_views"]` for the scored rows by `total`, and `["test_cold_views"]`,
+  `["val_cold_views"]` for the cold rows by `total_cold`. Baselines and controls: `pipeline.baseline_views` on
+  the same rows as `evaluate_baseline`. Table `label_views` of `eval.ablation.tables` prints them per method
+  next to the total, with the cold rows on their own lines.
+- A label frame without the two columns (synthetic injections, files written before 2026-11-17) gives no views
+  and a note in the run; nothing else changes.
+- Leak argument: finished scores and outcome labels only; nothing feeds back into a score.
+- PROVISIONAL: the mean as the per-paper aggregate (it is what the pilot's paper-level check used). Under the
+  cold-start rule a paper's events can fall on both sides, so a paper may appear in the scored and in the cold
+  per-paper view, each time with the mean over its events on that side.
+
 ## 8. Ablation semantics (book 4.2.1, plan S4.3)
 
 | Variant | s_embed | s_geom | s_temp | s_curvdyn | Other stages |

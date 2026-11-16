@@ -141,7 +141,9 @@ def event_labels_from_rwdb(events: pd.DataFrame, works: pd.DataFrame, labels_df:
     than being skipped. Without filters labels_df is taken as already filtered.
     mode: "strict" or "loose" DOI matching, as in rwdb.join_labels.
 
-    Returns DataFrame event_id (int64), label (int64 0/1) in the row order of `events`.
+    Returns DataFrame event_id (int64), label (int64 0/1), via_src, via_dst (int64 0/1: the citing paper,
+    the cited paper is labelled; label = via_src OR via_dst) in the row order of `events`. The two source
+    columns exist so that results can be reported apart for the two label sources (ledger G10).
     attrs["stats"]: the join_labels stats plus labeled_works_in_events, positive_events,
     positive_via_src, positive_via_dst.
 
@@ -176,6 +178,8 @@ def event_labels_from_rwdb(events: pd.DataFrame, works: pd.DataFrame, labels_df:
     out = pd.DataFrame({
         "event_id": _as_int64(events["event_id"], "event_id"),
         "label": (via_src | via_dst).astype(np.int64),
+        "via_src": via_src.astype(np.int64),
+        "via_dst": via_dst.astype(np.int64),
     })
     in_events = positive & (set(events["src_id"].astype(str)) | set(events["dst_id"].astype(str)))
     out.attrs["stats"] = {

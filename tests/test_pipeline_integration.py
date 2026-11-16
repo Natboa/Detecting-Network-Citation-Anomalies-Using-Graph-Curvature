@@ -28,9 +28,10 @@ import pytest
 from citecurv.config import load_config
 from citecurv.data.synthetic import load_fixture
 from citecurv.eval.ablation import VARIANTS
-from citecurv.eval.metrics import evaluate
+from citecurv.eval.metrics import evaluate, label_views
 from citecurv.pipeline import (
     baseline_record,
+    baseline_views,
     evaluate_baseline,
     frame_sha256,
     gate_cold_start,
@@ -470,3 +471,89 @@ def test_shuffle_gate_compares_the_fitted_cold_start_objects_not_the_row_count(f
     base, other = run(fx), run(fx)
     other.metrics["cold_start_scoring"]["n_rows"] += 1
     assert gate_shuffle(base, other)["value"]["fitted_objects_identical"] is True
+
+
+# ---------------------------------------------------------------- label sources and per-paper views (ledger G10)
+
+def _with_sources(labels):
+    """The fixture's labels with a made-up source: odd event ids are citing-side, even ones cited-side."""
+    lab = labels.copy()
+    pos, odd = lab["label"].to_numpy() == 1, lab["event_id"].to_numpy() % 2 == 1
+    lab["via_src"] = (pos & odd).astype(np.int64)
+    lab["via_dst"] = (pos & ~odd).astype(np.int64)
+    return lab
+
+
+def _same(a, b):
+    return json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)  # NaN-safe dict comparison
+
+
+def _aligned(res, lab):
+    by_id = lab.set_index("event_id").reindex(res.scores["event_id"].to_numpy()).fillna(0).astype(np.int64)
+    return by_id["label"].to_numpy(), by_id["via_src"].to_numpy(), by_id["via_dst"].to_numpy()
+
+
+def test_views_by_label_source_and_per_paper_sit_next_to_the_total(fx):
+    lab = _with_sources(fx["event_labels"])
+    res = run(fx, event_labels=lab)
+    s, ks = res.scores, tuple(res.config["eval"]["top_k"])
+    y, vs, vd = _aligned(res, lab)
+    for part in ("test", "val"):
+        keep = (res.split == part).to_numpy() & ~s["cold_start"].to_numpy()
+        want = label_views(s["total"].to_numpy()[keep], y[keep], vs[keep], vd[keep],
+                           s["src_id"].to_numpy()[keep], s["dst_id"].to_numpy()[keep], ks=ks)
+        got = res.metrics[f"{part}_views"]
+        assert _same(got, want), part
+        assert got["citing_side"]["n_pos"] + got["cited_side"]["n_pos"] == res.metrics[part]["n_pos"]
+
+
+def test_views_of_the_cold_start_rows_use_their_own_score(fx):
+    lab = _with_sources(fx["event_labels"])
+    res = run(fx, event_labels=lab)
+    s, ks = res.scores, tuple(res.config["eval"]["top_k"])
+    y, vs, vd = _aligned(res, lab)
+    cold = (res.split == "test").to_numpy() & s["cold_start"].to_numpy()
+    assert res.metrics["test_cold"] is not None
+    want = label_views(s["total_cold"].to_numpy()[cold], y[cold], vs[cold], vd[cold],
+                       s["src_id"].to_numpy()[cold], s["dst_id"].to_numpy()[cold], ks=ks)
+    got = res.metrics["test_cold_views"]
+    assert _same(got, want)
+    assert got["citing_side"]["n_pos"] + got["cited_side"]["n_pos"] == res.metrics["test_cold"]["n_pos"]
+
+
+def test_source_columns_change_no_score_and_no_total_metric(fx):
+    plain, sourced = run(fx), run(fx, event_labels=_with_sources(fx["event_labels"]))
+    pd.testing.assert_frame_equal(plain.scores, sourced.scores)
+    assert plain.data_hash == sourced.data_hash and plain.config_hash == sourced.config_hash
+    for key in ("test", "val", "test_cold", "val_cold", "weights"):
+        assert _same(plain.metrics[key], sourced.metrics[key]), key
+
+
+def test_labels_without_source_columns_give_no_views_and_say_so(fx):
+    res = run(fx)  # the fixture's labels: event_id, label
+    for key in ("test_views", "val_views", "test_cold_views", "val_cold_views"):
+        assert res.metrics[key] is None, key
+    assert any("via_src" in n for n in res.metrics["notes"])
+    unlabeled = run(fx, event_labels=None)
+    assert unlabeled.metrics["test_views"] is None and unlabeled.metrics["test_cold_views"] is None
+    assert not any("via_src" in n for n in unlabeled.metrics["notes"])
+
+
+def test_baseline_views_use_the_models_scored_test_events(fx):
+    lab = _with_sources(fx["event_labels"])
+    res = run(fx, event_labels=lab)
+    test = res.scores[(res.split == "test").to_numpy()]
+    base = pd.DataFrame({"event_id": test["event_id"].to_numpy()[::-1],
+                         "score": np.random.default_rng(3).random(len(test))})
+    got = baseline_views(res, base, lab)
+    kept = test[~test["cold_start"]].merge(base, on="event_id")
+    by_id = lab.set_index("event_id").reindex(kept["event_id"].to_numpy()).fillna(0).astype(np.int64)
+    want = label_views(kept["score"].to_numpy(), by_id["label"].to_numpy(), by_id["via_src"].to_numpy(),
+                       by_id["via_dst"].to_numpy(), kept["src_id"].to_numpy(), kept["dst_id"].to_numpy(),
+                       ks=tuple(res.config["eval"]["top_k"]))
+    assert _same(got, want)
+    assert got["citing_side"]["n_pos"] + got["cited_side"]["n_pos"] == evaluate_baseline(res, base, lab)["n_pos"]
+    assert baseline_views(res, base, fx["event_labels"]) is None  # no source columns: nothing to split by
+    rec = baseline_record(res, "baseline", "rand", evaluate_baseline(res, base, lab), views=got)
+    assert _same(rec["test_views"], got)
+    assert baseline_record(res, "baseline", "rand", {})["test_views"] is None

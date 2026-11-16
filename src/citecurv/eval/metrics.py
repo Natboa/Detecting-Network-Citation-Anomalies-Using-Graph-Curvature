@@ -119,6 +119,65 @@ def ranking_metrics(scores, labels, ks=DEFAULT_KS) -> dict:
     return out
 
 
+LABEL_VIEWS = ("citing_side", "cited_side", "per_citing_paper", "per_cited_paper")
+
+
+def _paper_metrics(s, positive, paper_ids, ks):
+    """ranking_metrics over papers: a paper's score is the mean score of its rows, and it is positive when
+    any of its rows is. Papers keep first-appearance order, so top-k ties are deterministic."""
+    import pandas as pd
+
+    codes, uniques = pd.factorize(np.asarray(paper_ids, dtype=object))
+    if (codes < 0).any():
+        raise ValueError("paper ids must not be null")
+    n = len(uniques)
+    count = np.bincount(codes, minlength=n)
+    mean = np.bincount(codes, weights=s, minlength=n) / np.maximum(count, 1)
+    pos = np.bincount(codes, weights=positive.astype(float), minlength=n) > 0
+    return ranking_metrics(mean, pos.astype(np.int64), ks=ks)
+
+
+def label_views(scores, labels, via_src, via_dst, src_ids, dst_ids, ks=DEFAULT_KS) -> dict:
+    """One ranked list seen four more ways (ledger G10): the two label sources apart, and per paper.
+
+    Inputs are equal-length array-likes, one entry per scored event: score, label (0/1), via_src and via_dst
+    (0/1: the event is positive because its citing paper, its cited paper is labelled), and the two paper ids.
+    Every positive must carry at least one source flag.
+
+    - citing_side: the positives labelled through the citing paper (via_src, including events labelled on both
+      sides) ranked against the negatives; positives of the other source leave the list.
+    - cited_side: the positives labelled through the cited paper only (via_dst and not via_src) ranked against
+      the same negatives. The two sources are disjoint and add up to all positives.
+    - per_citing_paper: one row per citing paper; score = mean score of its events in the list, positive when
+      the citing paper is labelled.
+    - per_cited_paper: one row per cited paper; score = mean score of the events citing it in the list, positive
+      when the cited paper is labelled.
+
+    Each value is a ranking_metrics dict (n and n_pos count events in the first two views, papers in the last
+    two). A view without positives has NaN ratios, as in ranking_metrics. The mean is PROVISIONAL as the
+    per-paper aggregate (it is what the pilot's paper-level check used); the choice is reporting only.
+    """
+    s, y = _to_arrays(scores, labels)
+    cols = {"via_src": via_src, "via_dst": via_dst, "src_ids": src_ids, "dst_ids": dst_ids}
+    arr = {k: np.asarray(v).ravel() for k, v in cols.items()}
+    for name, a in arr.items():
+        if a.shape != s.shape:
+            raise ValueError(f"length mismatch: {s.size} scores vs {a.size} {name}")
+    pos = y == 1
+    citing = pos & (arr["via_src"].astype(np.int64) == 1)
+    cited = pos & (arr["via_dst"].astype(np.int64) == 1)
+    if (pos & ~citing & ~cited).any():
+        raise ValueError(f"{int((pos & ~citing & ~cited).sum())} positive events have neither via_src nor via_dst")
+    cited_only = cited & ~citing
+    out = {}
+    for name, mine in (("citing_side", citing), ("cited_side", cited_only)):
+        rows = ~pos | mine
+        out[name] = ranking_metrics(s[rows], mine[rows].astype(np.int64), ks=ks)
+    out["per_citing_paper"] = _paper_metrics(s, citing, arr["src_ids"], ks)
+    out["per_cited_paper"] = _paper_metrics(s, cited, arr["dst_ids"], ks)
+    return out
+
+
 def evaluate(
     scores_df,
     labels_df,

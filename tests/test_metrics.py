@@ -18,7 +18,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from citecurv.eval import metrics as M
 from citecurv.eval.metrics import evaluate, ranking_metrics, seed_summary
+
+
+def label_views(*args, **kwargs):
+    return M.label_views(*args, **kwargs)
 
 
 def test_keys_are_the_contract_keys():
@@ -221,3 +226,72 @@ def test_seed_summary_single_seed_std_is_nan_and_keys_must_match():
         seed_summary([{"ap": 0.5}, {"auroc": 0.5}])
     with pytest.raises(ValueError):
         seed_summary([])
+
+
+# ---------------------------------------------------------------- label sources and per-paper views (ledger G10)
+
+def _views_input():
+    # row:      0     1     2     3     4     5
+    scores = [0.9, 0.8, 0.7, 0.6, 0.5, 0.1]
+    labels = [1, 0, 1, 1, 0, 0]
+    via_src = [1, 0, 0, 1, 0, 0]   # rows 0 and 3: the citing paper A is labelled
+    via_dst = [0, 0, 1, 1, 0, 0]   # rows 2 and 3: the cited paper Y is labelled
+    src = ["A", "B", "B", "A", "C", "C"]
+    dst = ["X", "X", "Y", "Y", "Z", "X"]
+    return scores, labels, via_src, via_dst, src, dst
+
+
+def test_label_views_keys():
+    v = label_views(*_views_input(), ks=(1,))
+    assert list(v) == ["citing_side", "cited_side", "per_citing_paper", "per_cited_paper"]
+    for m in v.values():
+        assert set(m) == {"n", "n_pos", "auroc", "ap", "p_at_1", "found_at_1"}
+
+
+def test_label_views_citing_side_ranks_its_positives_against_the_negatives_only():
+    v = label_views(*_views_input(), ks=(1,))["citing_side"]
+    # rows 0, 1, 3, 4, 5 (row 2 is a positive of the other source and leaves the list)
+    assert v == ranking_metrics([0.9, 0.8, 0.6, 0.5, 0.1], [1, 0, 1, 0, 0], ks=(1,))
+    assert v["n"] == 5 and v["n_pos"] == 2 and v["auroc"] == pytest.approx(5 / 6)
+
+
+def test_label_views_cited_side_holds_positives_labelled_through_the_cited_paper_only():
+    v = label_views(*_views_input(), ks=(1,))["cited_side"]
+    # rows 1, 2, 4, 5: row 3 is labelled on both sides and counts as citing-side, so the two sources are disjoint
+    assert v == ranking_metrics([0.8, 0.7, 0.5, 0.1], [0, 1, 0, 0], ks=(1,))
+    assert v["n_pos"] == 1 and v["auroc"] == pytest.approx(2 / 3)
+
+
+def test_label_views_per_citing_paper_scores_a_paper_by_the_mean_of_its_events():
+    v = label_views(*_views_input(), ks=(1,))["per_citing_paper"]
+    # A: mean(0.9, 0.6) = 0.75, labelled; B: mean(0.8, 0.7) = 0.75 (its positive is cited-side); C: 0.3
+    assert v["n"] == 3 and v["n_pos"] == 1
+    assert v["auroc"] == pytest.approx(0.75)  # tie with B counts 1/2, win over C counts 1
+    assert v["found_at_1"] == 1               # ties keep first-appearance order: A before B
+
+
+def test_label_views_per_cited_paper_scores_a_paper_by_the_mean_of_the_events_citing_it():
+    v = label_views(*_views_input(), ks=(1,))["per_cited_paper"]
+    # X: mean(0.9, 0.8, 0.1) = 0.6, not labelled; Y: mean(0.7, 0.6) = 0.65, labelled; Z: 0.5
+    assert v["n"] == 3 and v["n_pos"] == 1 and v["auroc"] == pytest.approx(1.0) and v["found_at_1"] == 1
+
+
+def test_label_views_a_source_without_positives_gives_nan_not_an_error():
+    s, _, _, _, src, dst = _views_input()
+    v = label_views(s, [1, 0, 0, 0, 0, 0], [1, 0, 0, 0, 0, 0], [0] * 6, src, dst, ks=(1,))
+    assert v["cited_side"]["n_pos"] == 0 and np.isnan(v["cited_side"]["auroc"])
+    assert v["per_cited_paper"]["n_pos"] == 0 and v["citing_side"]["n_pos"] == 1
+
+
+def test_label_views_reject_a_positive_with_no_source_and_unequal_lengths():
+    s, y, vs, vd, src, dst = _views_input()
+    with pytest.raises(ValueError, match="via_src"):
+        label_views(s, y, [0] * 6, vd, src, dst)       # rows 0 is positive with neither flag
+    with pytest.raises(ValueError, match="length"):
+        label_views(s, y, vs, vd, src[:5], dst)
+
+
+def test_label_views_are_json_plain_types():
+    import json
+
+    json.dumps(label_views(*_views_input(), ks=(1,)))

@@ -164,13 +164,28 @@ def test_event_labels_strict_src_or_dst_positive():
     ev = build_events(EDGES)
     # unfiltered labels: labelled papers W1 (strict), W4, W5; W2 only matches loosely (".v2")
     lab = event_labels_from_rwdb(ev, WORKS, LABELS, mode="strict")
-    assert list(lab.columns) == ["event_id", "label"]
+    assert list(lab.columns) == ["event_id", "label", "via_src", "via_dst"]
     assert lab["event_id"].tolist() == ev["event_id"].tolist()
     assert lab["label"].dtype == np.int64
     assert _labels_by_id(ev, lab) == {
         "W3>W1": 1, "W3>W2": 0, "W4>W1": 1, "W4>W3": 1, "W4>W4": 1, "W5>W1": 1, "W5>W2": 1}
     assert lab.attrs["stats"]["labeled_works"] == 3
     assert lab.attrs["stats"]["positive_events"] == 6
+
+
+def test_event_labels_say_which_side_carries_the_label():
+    """Ledger G10: results are reported apart for the two label sources, so the frame names the source."""
+    ev = build_events(EDGES)
+    lab = event_labels_from_rwdb(ev, WORKS, LABELS, mode="strict")  # labelled papers: W1, W4, W5
+    key = (ev.set_index("event_id").loc[lab["event_id"], "src_id"] + ">"
+           + ev.set_index("event_id").loc[lab["event_id"], "dst_id"]).to_numpy()
+    assert lab["via_src"].dtype == np.int64 and lab["via_dst"].dtype == np.int64
+    assert dict(zip(key, lab["via_src"])) == {
+        "W3>W1": 0, "W3>W2": 0, "W4>W1": 1, "W4>W3": 1, "W4>W4": 1, "W5>W1": 1, "W5>W2": 1}
+    assert dict(zip(key, lab["via_dst"])) == {
+        "W3>W1": 1, "W3>W2": 0, "W4>W1": 1, "W4>W3": 0, "W4>W4": 1, "W5>W1": 1, "W5>W2": 0}
+    assert ((lab["via_src"] | lab["via_dst"]) == lab["label"]).all()
+    assert lab.attrs["stats"]["positive_via_src"] == 5 and lab.attrs["stats"]["positive_via_dst"] == 4
 
 
 def test_event_labels_family_and_nature_filters_and_loose_mode():
