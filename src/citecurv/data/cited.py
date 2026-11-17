@@ -25,7 +25,10 @@ Resumable pulls. The sorted id list is cut into parts of `ids_per_part`; each fi
 parquet file in `<out stem>_parts/` next to the output, with a manifest holding the hash of the
 id list. A rerun with the same ids asks only for the parts that are missing; a folder written
 for another id list is refused. When every part exists they are merged into `out_path` and the
-folder is removed (unless keep_parts). The stats file next to the output stores the same hash, so
+folder is removed (unless keep_parts). The merge holds one part in memory at a time and writes one
+row group per part (2026-11-17; loading every part first took about 2 GB per 200,000 joint rows in a
+test on made-up rows, more than a 12.67 GB Colab machine has for the 1.5 million works of the full
+run). The stats file next to the output stores the same hash, so
 a rerun after the merge makes no call either (2026-11-16; before that it fetched everything again
 once the folder was gone).
 
@@ -162,15 +165,49 @@ def _part_frame(rows, columns):
     and a text column stays a string column when every value in the part is missing."""
     df = pd.DataFrame(rows, columns=columns).astype(object)
     if "ref_ids" in columns:
-        import pyarrow as pa
-
-        def column(name):
-            if name == "ref_ids":
-                return pa.array([list(x) for x in df[name]], pa.list_(pa.string()))
-            return pa.array(df[name], pa.int64() if name == "n_refs" else pa.string())
-
-        return pa.table({name: column(name) for name in columns})
+        return _arrow_table(df, columns)
     return df
+
+
+def _arrow_table(df, columns):
+    """`df` as an arrow table whose column types depend on the column names alone, never on the values:
+    ref_ids a list of strings, n_refs int64, every other column a string. Parts written one after the
+    other into one file therefore share a schema, also when a part has no abstract or no row."""
+    import pyarrow as pa
+
+    def column(name):
+        if name == "ref_ids":
+            return pa.array([list(x) for x in df[name]], pa.list_(pa.string()))
+        return pa.array(df[name].astype(object), pa.int64() if name == "n_refs" else pa.string())
+
+    return pa.table({name: column(name) for name in columns})
+
+
+def _merge_parts(part_paths, out_path, columns, extra_stats):
+    """Write the parts into `out_path` in order, one part in memory at a time; returns (rows, summed stats).
+
+    The parts hold consecutive slices of the sorted id list, so sorting each part by work_id gives a
+    file sorted by work_id. Each part with rows becomes one row group. `extra_stats` is computed per
+    part and summed (its values are counts). The file is written under a .tmp name and renamed.
+    """
+    import pyarrow.parquet as pq
+
+    out_path = Path(out_path)
+    tmp = out_path.with_name(out_path.name + ".tmp")
+    n_rows, totals = 0, {}
+    writer = pq.ParquetWriter(tmp, _arrow_table(pd.DataFrame(columns=columns), columns).schema)
+    try:
+        for path in part_paths:
+            df = pd.read_parquet(path).sort_values("work_id", kind="mergesort").reset_index(drop=True)[columns]
+            for key, value in extra_stats(df).items():
+                totals[key] = totals.get(key, 0) + value
+            if len(df):
+                writer.write_table(_arrow_table(df, columns))
+                n_rows += len(df)
+    finally:
+        writer.close()
+    tmp.replace(out_path)
+    return n_rows, totals
 
 
 def _write_frame(frame, path):
@@ -374,11 +411,9 @@ def pull_works_by_ids(ids, out_path, *, config=None, batch_size: int = MAX_IDS_P
             log(f"part {p + 1} of {-(-len(ids) // ids_per_part)}: {len(rows)} of {len(chunk)} ids found, "
                 f"{counts['calls']} calls so far")
 
-    df = pd.concat([pd.read_parquet(p) for p in part_paths], ignore_index=True)
-    df = df.sort_values("work_id", kind="mergesort").reset_index(drop=True)[columns]
-    _write_frame(_part_frame(df, columns), out_path)
-    stats = {"what": what, "n_ids": len(ids), "n_found": int(len(df)), "n_missing": int(len(ids) - len(df)),
-             **extra_stats(df), **counts, "cost_usd_reported": cost, "parts": len(part_paths),
+    n_found, summed = _merge_parts(part_paths, out_path, columns, extra_stats)
+    stats = {"what": what, "n_ids": len(ids), "n_found": int(n_found), "n_missing": int(len(ids) - n_found),
+             **summed, **counts, "cost_usd_reported": cost, "parts": len(part_paths),
              "batch_size": batch_size, "id_filter": id_filter, "already_complete": False,
              "ids_sha256": request["ids_sha256"], "select": request["select"]}
     stats_path.write_text(json.dumps(stats, indent=1), encoding="utf-8")

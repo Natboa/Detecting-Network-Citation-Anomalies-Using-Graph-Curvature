@@ -452,3 +452,70 @@ def test_a_part_folder_of_a_text_pull_is_refused_for_a_joint_pull(tmp_path):
     (tmp_path / "o.parquet").unlink()                                  # only the text parts are left
     with pytest.raises(ValueError, match="different id list"):
         pull_works_by_ids(["W1", "W2"], out, what="text_and_references", _fetch=FakeFetch(known))
+
+
+# --------------------------------------------------------------------------- the merge, one part at a time
+# 2026-11-17: the full run has 312 parts of 5,000 cited works (1,555,150 ids) and a Colab machine with
+# 12.67 GB of memory. Loading every part before writing the output may not fit, so the output is written
+# part by part: one row group per part that holds rows.
+
+class ReversedFetch(FakeFetch):
+    """Answers like FakeFetch with the records of a batch in reverse order."""
+
+    def __call__(self, ids):
+        resp = super().__call__(ids)
+        return {**resp, "results": resp["results"][::-1]}
+
+
+def test_the_joint_output_is_written_one_part_at_a_time_and_stays_sorted(tmp_path):
+    import json
+
+    import pyarrow.parquet as pq
+
+    ids = [f"W{i}" for i in range(1, 6)]                                 # parts of 2 ids: [W1 W2] [W3 W4] [W5]
+    known = {i: {**_work(i, title=f"title {i}", inv={"text": [0]} if i in ("W1", "W4") else None),
+                 **_ref_work(i, ["R1"] * int(i[1:]) if i != "W2" else [], count=3)} for i in ids}
+    out = tmp_path / "cited_joint.parquet"
+    stats = pull_works_by_ids(ids, out, what="text_and_references", batch_size=2, ids_per_part=2,
+                              _fetch=ReversedFetch(known))
+    meta = pq.ParquetFile(out).metadata
+    assert meta.num_row_groups == 3 and [meta.row_group(g).num_rows for g in range(3)] == [2, 2, 1]
+    df = pd.read_parquet(out)
+    assert list(df.work_id) == ids                                       # sorted inside a part and across parts
+    assert _plain(df["abstract"]) == ["text", None, None, "text", None]
+    assert [len(x) for x in df["ref_ids"]] == [1, 0, 3, 4, 5]
+    # the counts are the sums over the parts
+    assert stats["n_found"] == 5 and stats["n_missing"] == 0 and stats["parts"] == 3
+    assert stats["n_with_abstract"] == 2 and stats["n_no_title"] == 0
+    assert stats["n_with_refs"] == 4 and stats["n_ref_ids"] == 13 and stats["n_count_mismatch"] == 4
+    assert json.loads((tmp_path / "cited_joint_stats.json").read_text(encoding="utf-8")) == stats
+    assert not (tmp_path / "cited_joint_parts").exists() and not (tmp_path / "cited_joint.parquet.tmp").exists()
+
+
+def test_a_text_output_written_part_by_part_keeps_a_part_with_no_abstract_and_a_part_with_no_rows(tmp_path):
+    import pyarrow.parquet as pq
+
+    ids = [f"W{i}" for i in range(1, 7)]                                 # parts: [W1 W2] [W3 W4] [W5 W6]
+    known = {"W1": _work("W1", title="one"), "W2": _work("W2", title="two"),          # part 0: no abstract at all
+             "W5": _work("W5", title="five", inv={"world": [1], "hello": [0]}),       # part 1: no rows
+             "W6": _work("W6", title=None)}
+    out = tmp_path / "cited_works.parquet"
+    stats = pull_works_by_ids(ids, out, batch_size=2, ids_per_part=2, _fetch=ReversedFetch(known))
+    meta = pq.ParquetFile(out).metadata
+    assert meta.num_rows == 4 and meta.num_row_groups == 2               # the part with no rows adds no row group
+    df = pd.read_parquet(out)
+    assert list(df.columns) == ["work_id", "title", "abstract", "pub_date"]
+    assert list(df.work_id) == ["W1", "W2", "W5", "W6"]
+    assert _plain(df["title"]) == ["one", "two", "five", None]
+    assert _plain(df["abstract"]) == [None, None, "hello world", None]
+    assert stats["n_found"] == 4 and stats["n_missing"] == 2
+    assert stats["n_with_abstract"] == 1 and stats["n_no_title"] == 1
+
+
+def test_an_output_with_no_found_work_is_an_empty_file_with_the_columns(tmp_path):
+    out = tmp_path / "cited_joint.parquet"
+    stats = pull_works_by_ids(["W1", "W2", "W3"], out, what="text_and_references", ids_per_part=2,
+                              _fetch=FakeFetch({}))
+    df = pd.read_parquet(out)
+    assert len(df) == 0 and list(df.columns) == ["work_id", "title", "abstract", "pub_date", "n_refs", "ref_ids"]
+    assert stats["n_found"] == 0 and stats["n_missing"] == 3 and stats["n_ref_ids"] == 0
