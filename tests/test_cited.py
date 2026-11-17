@@ -354,3 +354,101 @@ def test_pull_by_ids_fetches_again_when_the_file_is_not_the_one_the_stats_descri
     broken = FakeFetch(known)
     pull_works_by_ids(["W0", "W1", "W2"], out, _fetch=broken)
     assert broken.batches == [["W0", "W1", "W2"]]
+
+
+# ---- text and reference lists in one request (what="text_and_references"), 2026-11-17. The full pull
+# asks for both about every cited work outside the slice; two separate pulls cost two calls per 100 ids
+# of a daily allowance of 10,000 calls, one joint pull costs one.
+
+def _plain(series):
+    """Cell values as plain Python: missing -> None, a list cell -> list."""
+    return [list(x) if isinstance(x, (list, np.ndarray)) else (None if pd.isna(x) else x) for x in series]
+
+
+def _joint_known():
+    known = {"W1": {**_work("W1", title="first", inv={"world": [1], "hello": [0]}), **_ref_work("W1", ["R1", "R2"])},
+             "W2": {**_work("W2", title=None, display="shown name"), **_ref_work("W2", [])},     # no abstract, no references
+             "W3": {**_work("W3", title="third", date="2016-05-06"), **_ref_work("W3", ["R1"], count=5, date="2016-05-06")}}
+    return known
+
+
+def test_pull_text_and_references_in_one_request_per_batch(tmp_path):
+    from citecurv.data.cited import DEFAULT_SELECT, JOINT_COLUMNS, JOINT_SELECT, REFERENCE_SELECT
+
+    assert set(JOINT_SELECT) == set(DEFAULT_SELECT) | set(REFERENCE_SELECT)
+    assert len(JOINT_SELECT) == len(set(JOINT_SELECT))                 # a field is asked for once
+    ids = ["W1", "W2", "W3", "W4"]
+    fetch = FakeFetch(_joint_known())
+    out = tmp_path / "cited_joint.parquet"
+    stats = pull_works_by_ids(ids, out, what="text_and_references", batch_size=2, _fetch=fetch)
+    assert [len(b) for b in fetch.batches] == [2, 2] and stats["calls"] == 2      # as many calls as one pull alone
+    df = pd.read_parquet(out)
+    assert list(df.columns) == JOINT_COLUMNS == ["work_id", "title", "abstract", "pub_date", "n_refs", "ref_ids"]
+    assert list(df.work_id) == ["W1", "W2", "W3"]
+    assert _plain(df["title"]) == ["first", "shown name", "third"]
+    assert _plain(df["abstract"]) == ["hello world", None, None]
+    assert _plain(df["pub_date"]) == ["2015-01-02", "2015-01-02", "2016-05-06"]
+    assert [int(n) for n in df["n_refs"]] == [2, 0, 5]
+    assert _plain(df["ref_ids"]) == [["R1", "R2"], [], ["R1"]]
+    assert stats["what"] == "text_and_references" and stats["select"] == list(JOINT_SELECT)
+    assert stats["n_ids"] == 4 and stats["n_found"] == 3 and stats["n_missing"] == 1
+    assert stats["n_with_abstract"] == 1 and stats["n_no_title"] == 0             # the text pull's counts
+    assert stats["n_with_refs"] == 2 and stats["n_ref_ids"] == 3 and stats["n_count_mismatch"] == 1   # the reference pull's
+
+
+def test_the_joint_file_holds_what_the_two_separate_pulls_hold(tmp_path):
+    from citecurv.data.cited import COLUMNS, REFERENCE_COLUMNS
+
+    ids, known = ["W1", "W2", "W3", "W4"], _joint_known()
+    pull_works_by_ids(ids, tmp_path / "text.parquet", batch_size=2, _fetch=FakeFetch(known))
+    pull_works_by_ids(ids, tmp_path / "refs.parquet", what="references", batch_size=2, _fetch=FakeFetch(known))
+    pull_works_by_ids(ids, tmp_path / "joint.parquet", what="text_and_references", batch_size=2, _fetch=FakeFetch(known))
+    text, refs, joint = (pd.read_parquet(tmp_path / f"{n}.parquet") for n in ("text", "refs", "joint"))
+    for col in COLUMNS:
+        assert _plain(joint[col]) == _plain(text[col]), col
+    for col in REFERENCE_COLUMNS:
+        assert _plain(joint[col]) == _plain(refs[col]), col
+    # the reader of reference lists takes the joint frame as it is
+    from citecurv.data.cited import reference_events
+
+    assert reference_events(joint)[0].equals(reference_events(refs)[0])
+
+
+def test_pull_text_and_references_resumes_and_keeps_a_part_without_text_or_references(tmp_path):
+    # part 1 holds only W3 with no abstract and no references: its columns must survive the part round trip
+    known = _joint_known()
+    known["W3"] = {**_work("W3", title="third"), **_ref_work("W3", [])}
+    out = tmp_path / "cited_joint.parquet"
+    failing = FakeFetch(known, fail_on_call=1)
+    with pytest.raises(RuntimeError):
+        pull_works_by_ids(["W1", "W2", "W3"], out, what="text_and_references", batch_size=2, ids_per_part=2,
+                          _fetch=failing, config={"data": {"max_retries": 0}})
+    fetch = FakeFetch(known)
+    stats = pull_works_by_ids(["W1", "W2", "W3"], out, what="text_and_references", batch_size=2, ids_per_part=2,
+                              _fetch=fetch)
+    assert fetch.batches == [["W3"]] and stats["parts_reused"] == 1
+    df = pd.read_parquet(out)
+    assert _plain(df["abstract"]) == ["hello world", None, None]
+    assert _plain(df["ref_ids"]) == [["R1", "R2"], [], []] and stats["n_ref_ids"] == 2
+
+
+def test_a_finished_joint_pull_is_not_fetched_again_and_is_not_taken_for_a_text_pull(tmp_path):
+    known = _joint_known()
+    out = tmp_path / "o.parquet"
+    pull_works_by_ids(["W1", "W2"], out, what="text_and_references", _fetch=FakeFetch(known))
+    again = FakeFetch(known)
+    stats = pull_works_by_ids(["W1", "W2"], out, what="text_and_references", _fetch=again)
+    assert again.batches == [] and stats["already_complete"] is True
+    as_text = FakeFetch(known)
+    pull_works_by_ids(["W1", "W2"], out, _fetch=as_text)
+    assert as_text.batches == [["W1", "W2"]]
+    assert list(pd.read_parquet(out).columns) == ["work_id", "title", "abstract", "pub_date"]
+
+
+def test_a_part_folder_of_a_text_pull_is_refused_for_a_joint_pull(tmp_path):
+    known = _joint_known()
+    out = tmp_path / "o.parquet"
+    pull_works_by_ids(["W1", "W2"], out, _fetch=FakeFetch(known), keep_parts=True)
+    (tmp_path / "o.parquet").unlink()                                  # only the text parts are left
+    with pytest.raises(ValueError, match="different id list"):
+        pull_works_by_ids(["W1", "W2"], out, what="text_and_references", _fetch=FakeFetch(known))

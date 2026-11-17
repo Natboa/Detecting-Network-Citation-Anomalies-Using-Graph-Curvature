@@ -12,7 +12,8 @@ giving them text:
   by id in batches of at most 100 (OpenAlex combines up to 100 values with `|` in one filter and
   needs `per_page=100` to return them all; help.openalex.org, filter-entity-lists, read
   2026-11-12). The result has the columns `citecurv.embed.specter2` reads (work_id, title,
-  abstract) plus pub_date.
+  abstract) plus pub_date. `what="references"` fetches the reference lists instead, and
+  `what="text_and_references"` both in the same request (one call per 100 ids instead of two).
 - `resolve_id_filter(sample_ids)`: the documentation read on 2026-11-12 shows the multi-value
   form for DOIs only, not the attribute name for OpenAlex ids, so the name is found by a probe
   on the live API (two known ids must come back) before a long pull.
@@ -53,6 +54,11 @@ COLUMNS = ["work_id", "title", "abstract", "pub_date"]
 # needs the reference ids; a pull stores neither for works outside the slice.
 REFERENCE_SELECT = ("id", "publication_date", "referenced_works_count", "referenced_works")
 REFERENCE_COLUMNS = ["work_id", "pub_date", "n_refs", "ref_ids"]
+# what="text_and_references" (2026-11-17, for the full pull): both in one request per 100 ids, so the
+# cited works outside the slice cost one call per batch of the daily allowance instead of two. The
+# output holds the columns of both profiles; a reader of either takes the columns it needs.
+JOINT_SELECT = DEFAULT_SELECT + tuple(f for f in REFERENCE_SELECT if f not in DEFAULT_SELECT)
+JOINT_COLUMNS = ["work_id", "title", "abstract", "pub_date", "n_refs", "ref_ids"]
 
 
 # --------------------------------------------------------------------------- ids and counts
@@ -136,22 +142,34 @@ def _reference_stats(df) -> dict:
             "n_count_mismatch": int((n_listed != df["n_refs"].astype("int64")).sum())}
 
 
+def _joint_row(w) -> dict:
+    return {**_row(w), **_reference_row(w)}
+
+
+def _joint_stats(df) -> dict:
+    return {**_text_stats(df), **_reference_stats(df)}
+
+
 # what -> (default select, output columns, record -> row, frame -> extra stats)
 _PROFILES = {"text": (DEFAULT_SELECT, COLUMNS, _row, _text_stats),
-             "references": (REFERENCE_SELECT, REFERENCE_COLUMNS, _reference_row, _reference_stats)}
+             "references": (REFERENCE_SELECT, REFERENCE_COLUMNS, _reference_row, _reference_stats),
+             "text_and_references": (JOINT_SELECT, JOINT_COLUMNS, _joint_row, _joint_stats)}
 
 
 def _part_frame(rows, columns):
     """Part/output frame with stable column types: a list column stays a list of strings even when
-    every list in the part is empty (an all-empty list column would otherwise be written as list<null>)."""
+    every list in the part is empty (an all-empty list column would otherwise be written as list<null>),
+    and a text column stays a string column when every value in the part is missing."""
     df = pd.DataFrame(rows, columns=columns).astype(object)
     if "ref_ids" in columns:
         import pyarrow as pa
 
-        table = pa.table({"work_id": pa.array(df["work_id"], pa.string()), "pub_date": pa.array(df["pub_date"], pa.string()),
-                          "n_refs": pa.array(df["n_refs"], pa.int64()),
-                          "ref_ids": pa.array([list(x) for x in df["ref_ids"]], pa.list_(pa.string()))})
-        return table
+        def column(name):
+            if name == "ref_ids":
+                return pa.array([list(x) for x in df[name]], pa.list_(pa.string()))
+            return pa.array(df[name], pa.int64() if name == "n_refs" else pa.string())
+
+        return pa.table({name: column(name) for name in columns})
     return df
 
 
@@ -257,7 +275,9 @@ def pull_works_by_ids(ids, out_path, *, config=None, batch_size: int = MAX_IDS_P
     what="references" fetches the reference lists instead: columns work_id, pub_date, n_refs
     (OpenAlex `referenced_works_count`) and ref_ids (short ids of `referenced_works`); its stats
     carry n_with_refs, n_ref_ids and n_count_mismatch (rows whose list length differs from n_refs)
-    in place of n_with_abstract and n_no_title. select: fields to ask for (default: by `what`).
+    in place of n_with_abstract and n_no_title. what="text_and_references" fetches both in the same
+    request: columns work_id, title, abstract, pub_date, n_refs, ref_ids, and the stats of both.
+    select: fields to ask for (default: by `what`).
 
     ids: OpenAlex short ids (W...); duplicates are dropped and the list is sorted. batch_size: ids
     per request, at most 100. ids_per_part: ids per resumable part (see the module docstring).
