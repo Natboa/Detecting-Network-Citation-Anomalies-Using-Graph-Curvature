@@ -579,3 +579,54 @@ def test_the_screens_unknown_rule_comes_from_the_config_and_reaches_the_curvatur
     off = resolve_config({"curvature": {"screen_unknown_without_refs": False}}, variant="forman_only")
     curv, _, stats = curvature_stage(events, split, off)
     assert list(curv["forman"]) == [2.0, 1.0, 1.0] and stats["n_screen_unknown"] == 0
+
+
+# ----------------------------------------------------------------- context rows: reference lists of cited works
+
+def test_context_rows_reach_the_screen_and_the_orc_subgraph_of_the_curvature_stage():
+    from citecurv.pipeline import curvature_stage, resolve_config
+
+    # two uncited papers cite v on the same day; v's two references are known only as context rows
+    events = pd.DataFrame({"event_id": np.arange(2, dtype=np.int64), "src_id": ["u1", "u2"],
+                           "dst_id": ["v", "v"], "t": np.array([10, 10], dtype=np.int64)})
+    ctx = pd.DataFrame({"event_id": np.array([7, 8], dtype=np.int64), "src_id": ["v", "v"],
+                        "dst_id": ["r1", "r2"], "t": np.array([4, 4], dtype=np.int64)})
+    split = np.array(["train"] * 2)
+    rcfg = resolve_config({"curvature": {"screen_unknown_without_refs": True, "screen_inclusive_ties": True}})
+    seen = []
+
+    def orc(G, edges, **knobs):
+        seen.extend(sorted(G.successors(v)) for _, v in edges)
+        return {e: -0.5 for e in edges}
+
+    curv, _, stats = curvature_stage(events, split, rcfg, orc_fn=orc, context=ctx)
+    assert list(curv["event_id"]) == [0, 1] and list(curv["forman"]) == [0.0, 0.0]     # 2 - 0 - |{r1, r2}|
+    assert stats["n_context_rows"] == 2 and stats["n_screen_unknown"] == 0
+    assert seen == [["r1", "r2"], ["r1", "r2"]]                                         # ORC sees v's references
+    assert list(curv["orc"]) == [-0.5, -0.5]
+
+    # without the context rows nothing is known about v: every screen value is unknown, and the stage says so
+    with pytest.raises(ValueError, match="no training row has a screen value.*context"):
+        curvature_stage(events, split, rcfg, orc_fn=orc)
+    plain = resolve_config({"curvature": {"screen_unknown_without_refs": False, "screen_inclusive_ties": True}})
+    bare, _, bare_stats = curvature_stage(events, split, plain, orc_fn=orc)
+    assert list(bare["forman"]) == [2.0, 2.0] and bare_stats["n_context_rows"] == 0
+
+
+def test_run_pipeline_passes_context_rows_to_the_curvature_stage(fx):
+    from citecurv.curvature.screen import forman_screen
+
+    ev = fx["events"]
+    base = run(fx, variant="forman_only").curvature.set_index("event_id")["forman"]
+    assert base.isna().any()                                   # default config: unknown where dst has no reference
+    eid = int(base[base.isna()].index[0])
+    row = ev.set_index("event_id").loc[eid]
+    first = int(ev["event_id"].max()) + 1
+    ctx = pd.DataFrame({"event_id": np.arange(first, first + 3, dtype=np.int64), "src_id": [row["dst_id"]] * 3,
+                        "dst_id": ["CTX_A", "CTX_B", "CTX_C"], "t": np.full(3, int(ev["t"].min()) - 1, dtype=np.int64)})
+    res = run(fx, variant="forman_only", context=ctx)
+    got = res.curvature.set_index("event_id")["forman"]
+    plain = forman_screen(ev).set_index("event_id")["forman"]  # 2 - in_deg_t(src), the cited work has no reference
+    assert got.loc[eid] == plain.loc[eid] - 3
+    assert len(got) == len(ev)                                 # the context rows are not scored
+    assert not set(ctx["event_id"]) & set(res.scores["event_id"])

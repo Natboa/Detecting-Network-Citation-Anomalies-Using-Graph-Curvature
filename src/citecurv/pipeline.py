@@ -316,10 +316,14 @@ def _memo_key(row_src, row_dst, eid, t, radius):
     return (int(eid), str(row_src), str(row_dst), int(t), int(radius))
 
 
-def curvature_stage(events, split, rcfg, *, seed=0, orc_fn=None, store=None, orc_memo=None):
+def curvature_stage(events, split, rcfg, *, seed=0, orc_fn=None, store=None, orc_memo=None, context=None):
     """Curvature cache for the run's variant (None for no_curvature) plus thresholds and stage statistics.
 
-    events: canonical events frame; split: array of 'train'/'val'/'test' aligned with it. Returns
+    events: canonical events frame; split: array of 'train'/'val'/'test' aligned with it. context: optional
+    rows (event_id, src_id, dst_id, t; ids of their own) that take part in the graph and are not scored, e.g.
+    the reference lists of the cited works (citecurv.data.cited.reference_events). They enter the screen's
+    degrees and, when no store is passed, the EventStore behind the ORC subgraphs; a store passed in must
+    already hold them. Thresholds are fitted on event rows only. Returns
     (curvature frame | None, thresholds | None, stats dict).
     """
     from citecurv.curvature.orc import escalate
@@ -332,19 +336,25 @@ def curvature_stage(events, split, rcfg, *, seed=0, orc_fn=None, store=None, orc
         return None, None, {"mode": "none"}
     cc = rcfg["curvature"]
     t0 = time.perf_counter()
+    n_context = 0 if context is None else int(len(context))
     curv = forman_screen(events, count_duplicates=cc["screen_count_duplicates"],
-                         unknown_without_refs=cc["screen_unknown_without_refs"])
+                         unknown_without_refs=cc["screen_unknown_without_refs"], context=context)
     if not np.array_equal(curv["event_id"].to_numpy(), events["event_id"].to_numpy()):
         raise RuntimeError("forman_screen returned rows out of canonical order")
     n_unknown = int(curv["forman"].isna().sum())  # cited work with no reference at t (screen_unknown_without_refs)
     train = np.asarray(split) == "train"
+    if train.any() and not np.isfinite(curv["forman"].to_numpy(dtype=float)[train]).any():
+        raise ValueError(
+            "no training row has a screen value: every cited work has no reference at its event's time. With "
+            "curvature.screen_unknown_without_refs on, the reference lists of the cited works must be passed as "
+            f"context rows (citecurv.data.cited.reference_events); got {n_context} context rows")
     th = screen_thresholds(curv, train, cc["screen_percentile_low"], cc["screen_percentile_high"],
                            inclusive=cc["screen_inclusive_ties"])
     curv = apply_screen(curv, th)
     n_screen = int(curv["escalated"].sum())
     stats = {"mode": mode, "n_events": int(len(curv)), "n_screen_flagged": n_screen,
              "screen_rate": n_screen / max(len(curv), 1), "n_screen_unknown": n_unknown,
-             "screen_s": time.perf_counter() - t0}
+             "n_context_rows": n_context, "screen_s": time.perf_counter() - t0}
     if mode == "screen":
         curv["escalated"] = False
     elif mode == "random+orc":
@@ -377,7 +387,10 @@ def curvature_stage(events, split, rcfg, *, seed=0, orc_fn=None, store=None, orc
                     curv.iat[i, r_col] = float(radius)
                     curv.iat[i, s_col] = "escalate"
                     n_hit += 1
-        store = store if store is not None else EventStore(events)
+        if store is None:
+            cols = ["src_id", "dst_id", "t"]
+            store = EventStore(events if not n_context else pd.concat([events[cols], context[cols]],
+                                                                        ignore_index=True))
         curv, est = escalate(events, curv, store, radius, cc["orc_subgraph_edge_cap"], prune=cc["orc_prune"],
                              orc_fn=orc_fn, stage="escalate", **cc["orc"])
         if orc_memo is not None:
@@ -478,7 +491,7 @@ def cold_start_scores(comp, split, cold, components, cfg_weights, disabled=(), *
 
 def run_pipeline(events, works, *, authorships=None, embeddings=None, event_labels=None, cutoff=None,
                  variant="full", seed=0, cfg=None, tgn_scores=None, tgn_embeddings=None, orc_fn=None,
-                 out_dir=None, orc_memo=None, store=None, tags=None) -> RunResult:
+                 out_dir=None, orc_memo=None, store=None, tags=None, context=None) -> RunResult:
     """One run of one ablation cell; see the module docstring for the stages and their order.
 
     events: CONTRACTS.md events frame (event_id, src_id, dst_id, t; extra columns ignored). works: work_id +
@@ -491,6 +504,8 @@ def run_pipeline(events, works, *, authorships=None, embeddings=None, event_labe
     (G, edges, **knobs) -> {(u, v): kappa}; None = GraphRicciCurvature. out_dir: write the run artifacts
     there. orc_memo: dict reused across runs on the same stream (module docstring). store: a prebuilt
     EventStore of the same events. tags: free-form dict copied into metrics.json (e.g. level, data seed).
+    context: rows that take part in the curvature stage's graph and are not scored (curvature_stage); no
+    other stage reads them, and data_hash does not cover them (their count is in the curvature statistics).
 
     Returns RunResult. Raises ValueError for an unknown variant or malformed inputs.
     """
@@ -522,7 +537,7 @@ def run_pipeline(events, works, *, authorships=None, embeddings=None, event_labe
     # 2. curvature
     t0 = time.perf_counter()
     curv, thresholds, curv_stats = curvature_stage(ev, split, rcfg, seed=seed, orc_fn=orc_fn, store=store,
-                                                   orc_memo=orc_memo)
+                                                   orc_memo=orc_memo, context=context)
     timings["curvature_s"] = time.perf_counter() - t0
 
     # 3. components

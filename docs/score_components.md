@@ -132,8 +132,9 @@ a spike at the top of the distribution. The screen's s_geom therefore flags cita
 in-slice reference count, plus citing papers already cited at publication. Most of the geometric signal is
 expected from ORC (escalated events) and from s_curvdyn.
 
-**Unknown values (D13, 2026-11-18).** With the reference lists of the cited papers added to the event table as
-context rows (`citecurv.data.cited.reference_events`), out_deg_t(v) is the cited paper's reference count and the
+**Unknown values (D13, 2026-11-18).** With the reference lists of the cited papers given to the screen as
+context rows (`citecurv.data.cited.reference_events`, passed as `context` to `forman_screen`, `curvature_stage`
+and `run_pipeline`: rows that count in the graph and are not scored), out_deg_t(v) is the cited paper's reference count and the
 spike shrinks to the papers that still have none: ids OpenAlex serves no record for, records with an empty
 reference list, and papers whose first known reference is dated after t. For these the screen has nothing to read
 on the cited side, and "no reference" cannot be told from "reference list not known". With

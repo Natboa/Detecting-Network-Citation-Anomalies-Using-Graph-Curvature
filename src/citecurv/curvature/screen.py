@@ -76,7 +76,22 @@ def _count_upto(sorted_keys, node, tt, span):
     return np.searchsorted(sorted_keys, base + tt, "right") - np.searchsorted(sorted_keys, base, "left")
 
 
-def forman_screen(events, *, count_duplicates=False, unknown_without_refs=False) -> pd.DataFrame:
+def _with_context(ev, context):
+    """(all rows in canonical order, boolean mask of the scored rows). `ev` is canonical; context rows
+    are validated like events and must not reuse an event id."""
+    if context is None or len(context) == 0:
+        if context is not None:
+            _canonical(context)  # still reject a frame without the event columns
+        return ev, np.ones(len(ev), dtype=bool)
+    ctx = _canonical(context)
+    if ctx["event_id"].isin(ev["event_id"]).any():
+        raise ValueError("context rows must not reuse an event_id of events")
+    rows = pd.concat([ev.assign(_scored=True), ctx.assign(_scored=False)], ignore_index=True)
+    rows = rows.sort_values(["t", "event_id"], kind="mergesort").reset_index(drop=True)
+    return rows[EVENT_COLUMNS], rows["_scored"].to_numpy(dtype=bool)
+
+
+def forman_screen(events, *, count_duplicates=False, unknown_without_refs=False, context=None) -> pd.DataFrame:
     """Unweighted directed Forman curvature of every event at its own time.
 
     events: DataFrame with event_id (unique), src_id, dst_id, t (int days).
@@ -85,6 +100,12 @@ def forman_screen(events, *, count_duplicates=False, unknown_without_refs=False)
     the leak argument.
     unknown_without_refs: True writes NaN where out_deg_t(dst) is 0 (the module
     docstring, "Unknown values"); False (default) keeps F = 2 - in_deg_t(src).
+    context: optional frame with the same four columns and event ids of its own
+    (e.g. citecurv.data.cited.reference_events: the reference lists of the cited
+    works). Its rows take part in the degrees exactly as event rows do (ts <= t,
+    duplicate and self-loop rules) and are not scored: the result has the rows
+    of `events` only and equals the screen of the two frames together,
+    restricted to them.
 
     Returns the curvature-cache frame (CURVATURE_COLUMNS) in canonical order
     (t, event_id): forman filled, orc NaN, escalated False, radius NaN,
@@ -94,23 +115,27 @@ def forman_screen(events, *, count_duplicates=False, unknown_without_refs=False)
     n = len(ev)
     forman = np.empty(n, dtype=np.float64)
     if n:
-        codes, uniques = pd.factorize(pd.concat([ev["src_id"], ev["dst_id"]], ignore_index=True))
-        s = codes[:n].astype(np.int64)
-        d = codes[n:].astype(np.int64)
-        tt = ev["t"].to_numpy(np.int64)
-        tt = tt - tt.min()
-        span = int(tt.max()) + 1
+        rows, scored = _with_context(ev, context)
+        m = len(rows)
+        codes, uniques = pd.factorize(pd.concat([rows["src_id"], rows["dst_id"]], ignore_index=True))
+        s_all = codes[:m].astype(np.int64)
+        d_all = codes[m:].astype(np.int64)
+        tt_all = rows["t"].to_numpy(np.int64)
+        tt_all = tt_all - tt_all.min()
+        span = int(tt_all.max()) + 1
         if len(uniques) * span >= 2**62:
             raise ValueError("node count x time span too large for int64 composite keys")
 
         if count_duplicates:
-            ps, pdst, pt = s, d, tt
+            ps, pdst, pt = s_all, d_all, tt_all
         else:
             # rows are time-sorted, so keep="first" keeps each pair's first occurrence
-            first = ~pd.DataFrame({"s": s, "d": d}).duplicated(keep="first").to_numpy()
-            ps, pdst, pt = s[first], d[first], tt[first]
+            first = ~pd.DataFrame({"s": s_all, "d": d_all}).duplicated(keep="first").to_numpy()
+            ps, pdst, pt = s_all[first], d_all[first], tt_all[first]
         in_keys = np.sort(pdst * span + pt)   # in-edges keyed by their head
         out_keys = np.sort(ps * span + pt)    # out-edges keyed by their tail
+        # degrees are read for the scored rows only; every row (context included) is in the keys
+        s, d, tt = s_all[scored], d_all[scored], tt_all[scored]
         in_src = _count_upto(in_keys, s, tt, span)
         out_dst = _count_upto(out_keys, d, tt, span)
 
@@ -119,8 +144,9 @@ def forman_screen(events, *, count_duplicates=False, unknown_without_refs=False)
             if count_duplicates:
                 own = loop  # the row itself was counted once in each degree
             else:
-                ls, lt = s[loop], tt[loop]
-                n_loops_upto = _count_upto(np.sort(ls * span + lt), ls, lt, span)
+                loop_all = s_all == d_all  # self-loop rows of the node, context rows included
+                loop_keys = np.sort(s_all[loop_all] * span + tt_all[loop_all])
+                n_loops_upto = _count_upto(loop_keys, s[loop], tt[loop], span)
                 own = np.zeros(n, dtype=bool)
                 own[np.flatnonzero(loop)[n_loops_upto == 1]] = True  # no other self-loop row
             in_src = in_src - own
@@ -138,13 +164,16 @@ def forman_screen(events, *, count_duplicates=False, unknown_without_refs=False)
     return out[CURVATURE_COLUMNS]
 
 
-def spot_check(events, curv, n=20, seed=0, *, unknown_without_refs=False) -> pd.DataFrame:
+def spot_check(events, curv, n=20, seed=0, *, unknown_without_refs=False, context=None) -> pd.DataFrame:
     """Recompute F for n random events with direct boolean filtering (an
     independent code path, O(E) per event) and compare with curv["forman"].
     Uses the default distinct-neighbour semantics. unknown_without_refs: the
     option curv was computed with; when True the recomputed value is NaN where
-    the cited work has no reference at t, and NaN matches NaN. S2.2 verify step."""
+    the cited work has no reference at t, and NaN matches NaN. context: the
+    context rows curv was computed with (they are read, not sampled). S2.2 verify step."""
     ev = _canonical(events)
+    if context is not None and len(context):
+        ev = pd.concat([ev, _canonical(context)], ignore_index=True)
     rng = np.random.default_rng(seed)
     ids = rng.choice(curv["event_id"].to_numpy(), size=min(n, len(curv)), replace=False)
     cached = curv.set_index("event_id")["forman"]

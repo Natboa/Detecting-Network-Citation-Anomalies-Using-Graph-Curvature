@@ -21,7 +21,7 @@ created by whoever merges the work (`git tag v0.2.0 && git push origin v0.2.0`).
 | 3b | `25_cited_text.ipynb` | S1.7 follow-up test (2026-11-12): title and abstract of cited works outside the pulled set, their SPECTER2 vectors (`embeddings_cited.npz`, read by `40_tgn` through `EXTRA_EMB_PATH`), and the cold-start count | GPU (T4) | 3.12 required | pilot test, not part of the planned pipeline yet |
 | 3c | `26_cited_refs.ipynb` | S2.2 follow-up test (2026-11-12): reference count and reference ids of cited works outside the pulled set (`cited_refs.parquet`), which the Forman screen and the Ollivier/coupling part need | CPU (standard) | 3.12 or newer | pilot test, not part of the planned pipeline yet |
 | 3d | `27_cited_joint.ipynb` | S4.0 full run (2026-11-17): title, abstract, date, reference count and reference ids of cited works outside the pulled set in one pull (`cited_joint.parquet`), one call per 100 ids instead of the two of `25` and `26`; stops when the daily allowance is spent and continues on a rerun after the reset | CPU (standard for the fetching days, High-RAM for the run that merges) | 3.12 or newer | written, not run yet; its trial cell must pass before the pull |
-| 4 | `30_curvature.ipynb` | S2.2 Forman screen, S2.3 threshold/radius/budget grid and ORC escalation | CPU, high-RAM | 3.12 required (opt-in 3.13 path) | ready |
+| 4 | `30_curvature.ipynb` | S2.2 Forman screen, S2.3 threshold/radius/budget grid and ORC escalation; reads the cited works' reference lists (`cited_joint.parquet`, or `cited_refs.parquet`) as context rows | CPU, high-RAM | 3.12 required (opt-in 3.13 path) | edited 2026-11-18 for the context rows and the unknown rule (G13), not run since |
 | 5 | `40_tgn.ipynb` | S1.7 pilot training, S4.2 main runs | GPU (T4 for the pilot) | 3.12 (warns otherwise) | ready |
 | 6 | `50_eval.ipynb` | S3.4, S4.3 ablations, S4.4 baselines, S4.6 tables | GPU | 3.12 | not written yet |
 
@@ -182,6 +182,14 @@ Escalation (ORC on flagged events) runs in chunks of `curvature.orc_escalate_chu
 through `escalate(..., max_events=CHUNK)`, and the cache is written after every chunk; a rerun keeps
 rows already computed and continues with the rest. The S2.3 budget grid is a sample and is simply
 rerun.
+Since 2026-11-18 the notebook writes `screen_settings.json` next to the cache (duplicate rule, unknown
+rule, the context file and its row count) and refuses a cache whose settings differ or are missing, so a
+cache computed without the cited works' reference lists is not picked up by mistake: rename or delete it.
+Memory: on the pilot (606,129 events and 11,633,195 context rows) loading, building the context rows and
+one screen peaked at 2,983 MB on the laptop in 19.5 s. The full run has about 4.6 times the rows (7,956,456
+events and 47,836,643 reference ids), so about 14 GB by that rate: an estimate from the laptop, not a
+measurement in Colab, and it is more than a standard runtime has. The EventStore behind the ORC subgraphs
+holds every row as Python objects and was not measured at that size.
 
 **40_tgn (DyGLib TGN).** DyGLib has no mid-run resume. `train_tgn` runs DyGLib in a child process
 with its work folder on local disk; the best-on-validation checkpoint is moved into the run folder

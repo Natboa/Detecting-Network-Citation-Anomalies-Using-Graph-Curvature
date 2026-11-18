@@ -323,6 +323,82 @@ def test_context_rows_with_a_cited_works_references_make_it_known():
     assert both.set_index("event_id").loc[0, "forman"] == 0.0            # 2 - 0 - 2
 
 
+# ------------------------------------------------ context rows (reference lists of cited works)
+# 2026-11-18: the reference lists of the cited works (citecurv.data.cited.reference_events) are rows that
+# take part in the degrees and are not scored. forman_screen(events, context=...) returns the event rows only.
+
+def split_rows(rows, seed, share=0.5):
+    rng = random.Random(1000 + seed)
+    ev, ctx = [], []
+    for r in rows:
+        (ctx if rng.random() < share else ev).append(r)
+    return ev, ctx
+
+
+def test_context_rows_enter_the_degrees_and_only_event_rows_come_back():
+    events = make_events([(0, "u", "v", 10)])
+    ctx = make_events([(1, "v", "r1", 4), (2, "v", "r2", 4), (3, "w", "u", 9)])
+    curv = forman_screen(events, context=ctx)
+    assert list(curv.columns) == CURVATURE_COLUMNS and list(curv["event_id"]) == [0]
+    assert curv["forman"].iloc[0] == -1.0                      # 2 - in(u) = {w} - out(v) = {r1, r2}
+    assert screen_dict([(0, "u", "v", 10)]) == {0: 2.0}        # without the context rows
+
+
+def test_a_context_row_dated_after_the_event_is_not_read():
+    events = make_events([(0, "u", "v", 10)])
+    ctx = make_events([(1, "v", "r1", 11), (2, "w", "u", 11)])
+    assert forman_screen(events, context=ctx)["forman"].iloc[0] == 2.0
+    assert np.isnan(forman_screen(events, context=ctx, unknown_without_refs=True)["forman"].iloc[0])
+    same_day = make_events([(1, "v", "r1", 10)])               # same-t rows of other events are included
+    assert forman_screen(events, context=same_day, unknown_without_refs=True)["forman"].iloc[0] == 1.0
+
+
+@pytest.mark.parametrize("unknown", [False, True])
+@pytest.mark.parametrize("count_duplicates", [False, True])
+@pytest.mark.parametrize("shape", sorted(SHAPES))
+@pytest.mark.parametrize("seed", [0, 1, 2, 3])
+def test_screen_with_context_equals_the_screen_of_the_whole_table_on_the_event_rows(seed, shape, count_duplicates, unknown):
+    # self-loops and duplicate pairs fall on both sides of the split, and across it
+    rows = random_rows(seed, **SHAPES[shape])
+    ev_rows, ctx_rows = split_rows(rows, seed)
+    kw = dict(count_duplicates=count_duplicates, unknown_without_refs=unknown)
+    whole = forman_screen(make_events(rows), **kw)
+    want = whole[whole["event_id"].isin([r[0] for r in ev_rows])].reset_index(drop=True)
+    got = forman_screen(make_events(ev_rows), context=make_events(ctx_rows), **kw)
+    pd.testing.assert_frame_equal(got, want)
+    assert len(got) == len(ev_rows) and 0 < len(ctx_rows)
+
+
+def test_an_empty_context_changes_nothing_and_input_order_does_not_matter():
+    rows = random_rows(4)
+    ev_rows, ctx_rows = split_rows(rows, 4)
+    plain = forman_screen(make_events(ev_rows))
+    pd.testing.assert_frame_equal(forman_screen(make_events(ev_rows), context=make_events([])), plain)
+    a = forman_screen(make_events(ev_rows), context=make_events(ctx_rows))
+    b = forman_screen(make_events(ev_rows[::-1]), context=make_events(ctx_rows[::-1]))
+    pd.testing.assert_frame_equal(a, b)
+
+
+def test_context_must_have_the_event_columns_and_its_own_ids():
+    events = make_events([(0, "u", "v", 10), (1, "u", "w", 10)])
+    with pytest.raises(ValueError, match="event_id"):
+        forman_screen(events, context=make_events([(1, "v", "r", 4)]))            # id 1 is an event
+    with pytest.raises(ValueError, match="event_id"):
+        forman_screen(events, context=make_events([(5, "v", "r", 4), (5, "v", "q", 4)]))
+    with pytest.raises(ValueError, match="column"):
+        forman_screen(events, context=pd.DataFrame({"event_id": [5], "src": ["v"], "dst": ["r"], "t": [4]}))
+
+
+def test_spot_check_reads_the_context_rows():
+    rows = random_rows(8, n_nodes=80, n_events=200, t_max=20)
+    ev_rows, ctx_rows = split_rows(rows, 8)
+    ev, ctx = make_events(ev_rows), make_events(ctx_rows)
+    curv = forman_screen(ev, context=ctx, unknown_without_refs=True)
+    chk = spot_check(ev, curv, n=60, seed=0, unknown_without_refs=True, context=ctx)
+    assert len(chk) == 60 and chk["match"].all()
+    assert not spot_check(ev, curv, n=60, seed=0, unknown_without_refs=True)["match"].all()   # the context matters
+
+
 # ----------------------------------------------------- thresholds / report
 
 def toy_curv():
