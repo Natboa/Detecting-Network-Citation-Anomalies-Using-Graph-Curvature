@@ -26,6 +26,7 @@ adds them with calibrated weights (section 9). Nothing in this note uses labels.
 | D10 | Missing or disabled components | NaN, never a filler value; the combiner treats NaN as z = 0 and gives a disabled component weight 0 | Impute a cell mean | NaN keeps "no evidence" distinct from "normal evidence" in the trace. |
 | D11 | `no_temporal` ablation | Changes the encoder only (DyGLib memory / time encoding off); s_temp stays on | Also turn s_temp off | The plan defines the cell as a static encoder. Turning s_temp off as well would test a different question (both temporal parts at once). Open question for Maor. |
 | D12 | z-statistics for model-based components | Fitted on train rows (contract) | Fit the s_embed (TGN) and s_curvdyn statistics on validation rows | On train rows both models are scored in-sample, so their train distributions sit slightly low and test z-scores slightly high (section 9). Open question for Maor. |
+| D13 | Screen value when the cited paper has no reference at t (new 2026-11-18, Maor, ledger G13) | F is NaN, so s_geom and the s_curvdyn target are NaN for the event and it is never escalated (`curvature.screen_unknown_without_refs: true`) | Keep F = 2 - in_deg_t(u) | The data cannot tell a paper without references from a paper whose reference list is not known (no OpenAlex record, or a record with an empty list). On the pilot 40,173 of the 45,227 events at F >= 2 cited such a paper and positives were rarer among them; D10 already says a missing value is NaN, never a filler (section 4). |
 
 ## 2. Notation and shared rules
 
@@ -130,6 +131,22 @@ in-slice references of the cited paper. A cited paper outside the slice has out_
 a spike at the top of the distribution. The screen's s_geom therefore flags citations to papers with an unusual
 in-slice reference count, plus citing papers already cited at publication. Most of the geometric signal is
 expected from ORC (escalated events) and from s_curvdyn.
+
+**Unknown values (D13, 2026-11-18).** With the reference lists of the cited papers added to the event table as
+context rows (`citecurv.data.cited.reference_events`), out_deg_t(v) is the cited paper's reference count and the
+spike shrinks to the papers that still have none: ids OpenAlex serves no record for, records with an empty
+reference list, and papers whose first known reference is dated after t. For these the screen has nothing to read
+on the cited side, and "no reference" cannot be told from "reference list not known". With
+`curvature.screen_unknown_without_refs: true` (the default in `configs/default.yaml`) F is NaN whenever
+out_deg_t(v) = 0. Such an event enters no cell reference and no screen threshold, is never escalated (so it has
+no kappa), and its s_geom and s_curvdyn are NaN: no evidence from the geometric components (D10), while s_embed
+and s_temp still score it. Measured on the pilot (606,129 events, reference lists of the cited papers included):
+62,650 events (10.34%) are unknown, 38,784 of them cite a paper with an empty list, 15,984 a paper without a
+record, 5,999 a paper whose known references are dated after t and 1,883 a slice paper without references; 38 of
+the 834 positive events are among them; every other event keeps its value, and no event is left at F >= 2 (the
+largest value is 1). The count of unknown rows of a run is `n_screen_unknown` in the curvature-stage statistics.
+Without the context rows nearly every event cites a paper with out_deg 0, so on real data the option presupposes
+them.
 
 **Leak argument.** F and kappa use edges with ts <= t minus the event's own row (EventStore, S2.1; curvature cache
 contract). The references use ts < t.

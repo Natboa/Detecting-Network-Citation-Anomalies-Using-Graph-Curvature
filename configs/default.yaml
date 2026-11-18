@@ -38,6 +38,7 @@ curvature:
   screen_percentile_high: null     # S2.3: upper quantile level, e.g. 0.99
   screen_inclusive_ties: false     # false: flag F < lo or F > hi; true: <= / >=
   screen_count_duplicates: false   # false: duplicate (src,dst) rows count once in degrees
+  screen_unknown_without_refs: true  # G13: F is NaN when the cited work has no reference at t (not known, not "zero")
   orc_radius: null                 # S2.3; 2 = exact time-t ORC, 1 = exact when src is uncited at t
   orc_subgraph_edge_cap: 5000      # tiered truncation, lossless unless relevant edges exceed it
   orc_prune: true                  # drop edges that cannot change unweighted ORC(u,v)

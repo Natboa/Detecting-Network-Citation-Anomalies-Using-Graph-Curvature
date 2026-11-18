@@ -223,6 +223,106 @@ def test_spot_check_agrees_with_screen():
     assert not spot_check(ev, bad, n=20, seed=0)["match"].any()
 
 
+# ------------------------------------- unknown when the cited work has no reference at t
+# 2026-11-18 (ledger G13): on the pilot, 40,173 of the 45,227 events at F >= 2 cited a work with no
+# reference information (no OpenAlex record, or a record with an empty reference list). The data cannot
+# tell "has no references" from "its references are not known", so with unknown_without_refs=True the
+# screen writes NaN (no evidence, D10) whenever out_deg_t(dst) is 0.
+
+def nan_to_none(d):
+    return {k: (None if np.isnan(v) else v) for k, v in d.items()}
+
+
+def test_unknown_without_refs_writes_nan_where_the_cited_work_has_no_reference_at_t():
+    rows = [
+        (1, "q", "z", 3),
+        (2, "p", "q", 5),
+        (3, "p", "r", 5),
+        (4, "w", "p", 5),
+    ]
+    # row 1: out(z) = {} -> unknown; row 2: out(q) = {z} -> 2 - 1 - 1 = 0; row 3: out(r) = {} -> unknown;
+    # row 4: out(p) = {q, r} (same t) -> 2 - 0 - 2 = 0
+    assert nan_to_none(screen_dict(rows, unknown_without_refs=True)) == {1: None, 2: 0.0, 3: None, 4: 0.0}
+    assert screen_dict(rows) == {1: 2.0, 2: 0.0, 3: 1.0, 4: 0.0}   # the default screen is unchanged
+
+
+def test_unknown_without_refs_reads_the_reference_list_at_the_events_time_only():
+    # a's reference a->b arrives at t=2: at t=1 nothing is known about a's references, at t=3 one is
+    rows = [(1, "x", "a", 1), (2, "a", "b", 2), (3, "y", "a", 3)]
+    assert nan_to_none(screen_dict(rows, unknown_without_refs=True)) == {1: None, 2: None, 3: 1.0}
+
+
+def test_unknown_without_refs_does_not_count_the_scored_row_as_a_reference():
+    # a self-loop row is an out-edge of its own cited work; it is not evidence about that work
+    assert nan_to_none(screen_dict([(1, "a", "a", 1)], unknown_without_refs=True)) == {1: None}
+    rows = [(1, "a", "a", 1), (2, "a", "a", 2)]   # row 2 sees the earlier self-loop as a reference of a
+    assert nan_to_none(screen_dict(rows, unknown_without_refs=True)) == {1: None, 2: 0.0}
+
+
+def test_unknown_without_refs_leaves_a_work_with_a_reference_and_an_uncited_citer_alone():
+    # in_deg_t(src) = 0 is information (the citing paper is new), only the cited side decides "unknown"
+    rows = [(1, "a", "b", 1), (2, "x", "a", 2)]
+    assert nan_to_none(screen_dict(rows, unknown_without_refs=True)) == {1: None, 2: 1.0}
+
+
+@pytest.mark.parametrize("count_duplicates", [False, True])
+@pytest.mark.parametrize("shape", sorted(SHAPES))
+@pytest.mark.parametrize("seed", [0, 1, 2, 3])
+def test_unknown_without_refs_matches_brute_force_on_random_streams(seed, shape, count_duplicates):
+    rows = random_rows(seed, **SHAPES[shape])
+    got = nan_to_none(screen_dict(rows, count_duplicates=count_duplicates, unknown_without_refs=True))
+    exp = {}
+    for eid, s, d, t in rows:
+        ctx = [(s2, d2) for e2, s2, d2, t2 in rows if e2 != eid and t2 <= t]
+        refs_of_d = [d2 for s2, d2 in ctx if s2 == d]
+        citers_of_s = [s2 for s2, d2 in ctx if d2 == s]
+        if not refs_of_d:
+            exp[eid] = None
+        elif count_duplicates:
+            exp[eid] = 2.0 - len(citers_of_s) - len(refs_of_d)
+        else:
+            exp[eid] = 2.0 - len(set(citers_of_s)) - len(set(refs_of_d))
+    assert got == exp
+    assert any(v is not None for v in exp.values())
+    if shape == "sparse":   # the dense streams of some seeds have a reference for every cited node from t = 1 on
+        assert any(v is None for v in exp.values())
+
+
+def test_unknown_rows_are_never_escalated_and_do_not_move_the_cut_offs():
+    rows = random_rows(9, n_nodes=80, n_events=200, t_max=20)
+    ev = make_events(rows)
+    curv = forman_screen(ev, unknown_without_refs=True)
+    known = curv["forman"].notna().to_numpy()
+    assert known.any() and (~known).any()
+    th = screen_thresholds(curv, np.ones(len(curv), bool), 0.1, 0.9, inclusive=True)
+    assert th["global"]["n_ref"] == int(known.sum())
+    assert th["global"] == screen_thresholds(curv[known], np.ones(int(known.sum()), bool), 0.1, 0.9, inclusive=True)["global"]
+    out = apply_screen(curv, th)
+    assert out["escalated"].any() and not out.loc[~known, "escalated"].any()
+    assert screen_report(curv).loc["all", "n"] == int(known.sum())
+
+
+def test_spot_check_agrees_with_a_screen_that_writes_unknown():
+    rows = random_rows(8, n_nodes=80, n_events=200, t_max=20)
+    ev = make_events(rows)
+    curv = forman_screen(ev, unknown_without_refs=True)
+    chk = spot_check(ev, curv, n=60, seed=0, unknown_without_refs=True)
+    assert len(chk) == 60 and chk["match"].all()
+    assert chk["forman"].isna().any() and chk["forman"].notna().any()
+    # a value where "unknown" belongs, and "unknown" where a value belongs, are both mismatches
+    plain = forman_screen(ev)
+    assert not spot_check(ev, plain, n=60, seed=0, unknown_without_refs=True)["match"].all()
+    assert not spot_check(ev, curv, n=60, seed=0)["match"].all()
+
+
+def test_context_rows_with_a_cited_works_references_make_it_known():
+    events = make_events([(0, "u", "v", 10)])
+    assert nan_to_none(dict(zip(*[forman_screen(events, unknown_without_refs=True)[c] for c in ("event_id", "forman")]))) == {0: None}
+    ctx = make_events([(1, "v", "r1", 4), (2, "v", "r2", 4)])            # v's reference list, dated at v's publication
+    both = forman_screen(pd.concat([events, ctx], ignore_index=True), unknown_without_refs=True)
+    assert both.set_index("event_id").loc[0, "forman"] == 0.0            # 2 - 0 - 2
+
+
 # ----------------------------------------------------- thresholds / report
 
 def toy_curv():

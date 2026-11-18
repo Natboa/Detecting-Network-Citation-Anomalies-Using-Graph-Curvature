@@ -129,6 +129,8 @@ def test_value_ranges_and_cold_start_rule(fx):
     assert cur.loc[cur["escalated"] & (cur["src_id"] != cur["dst_id"]), "orc"].between(-1, 1).all()
     train = (res.split == "train").to_numpy()
     f = cur["forman"].to_numpy()[train]
+    assert np.isnan(f).any()   # default config: the screen writes NaN where the cited work has no reference at t (G13)
+    f = f[~np.isnan(f)]        # those rows enter no cut-off
     assert res.thresholds["global"]["lo"] == pytest.approx(np.quantile(f, 0.1))
     assert res.thresholds["global"]["hi"] == pytest.approx(np.quantile(f, 0.9))
     assert set(res.split) == {"train", "val", "test"}
@@ -557,3 +559,23 @@ def test_baseline_views_use_the_models_scored_test_events(fx):
     rec = baseline_record(res, "baseline", "rand", evaluate_baseline(res, base, lab), views=got)
     assert _same(rec["test_views"], got)
     assert baseline_record(res, "baseline", "rand", {})["test_views"] is None
+
+
+# ----------------------------------------------------------------- unknown screen values (ledger G13, 2026-11-18)
+
+def test_the_screens_unknown_rule_comes_from_the_config_and_reaches_the_curvature_stage():
+    from citecurv.pipeline import curvature_stage, resolve_config
+
+    assert resolve_config()["curvature"]["screen_unknown_without_refs"] is True      # configs/default.yaml
+    assert resolve_config({})["curvature"]["screen_unknown_without_refs"] is False   # a config without the key
+    # a's reference a->b arrives at t=2: events 0 and 1 cite a work with no reference at their time
+    events = pd.DataFrame({"event_id": np.arange(3, dtype=np.int64), "src_id": ["x", "a", "y"],
+                           "dst_id": ["a", "b", "a"], "t": np.array([1, 2, 3], dtype=np.int64)})
+    split = np.array(["train"] * 3)
+    on = resolve_config({"curvature": {"screen_unknown_without_refs": True}}, variant="forman_only")
+    curv, _, stats = curvature_stage(events, split, on)
+    assert np.isnan(curv["forman"].to_numpy()[:2]).all() and curv["forman"].iloc[2] == 1.0
+    assert stats["n_screen_unknown"] == 2
+    off = resolve_config({"curvature": {"screen_unknown_without_refs": False}}, variant="forman_only")
+    curv, _, stats = curvature_stage(events, split, off)
+    assert list(curv["forman"]) == [2.0, 1.0, 1.0] and stats["n_screen_unknown"] == 0

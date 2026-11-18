@@ -167,6 +167,7 @@ def resolve_config(cfg=None, *, variant="full", seed=0) -> dict:
                                                  pipe["screen_percentile_high"])),
             "screen_inclusive_ties": bool(pick(curv.get("screen_inclusive_ties"), False)),
             "screen_count_duplicates": bool(pick(curv.get("screen_count_duplicates"), False)),
+            "screen_unknown_without_refs": bool(pick(curv.get("screen_unknown_without_refs"), False)),
             "orc_radius": int(pick(curv.get("orc_radius"), pipe["orc_radius"])),
             "orc_subgraph_edge_cap": int(pick(curv.get("orc_subgraph_edge_cap"), 5000)),
             "orc_prune": bool(pick(curv.get("orc_prune"), True)),
@@ -331,16 +332,19 @@ def curvature_stage(events, split, rcfg, *, seed=0, orc_fn=None, store=None, orc
         return None, None, {"mode": "none"}
     cc = rcfg["curvature"]
     t0 = time.perf_counter()
-    curv = forman_screen(events, count_duplicates=cc["screen_count_duplicates"])
+    curv = forman_screen(events, count_duplicates=cc["screen_count_duplicates"],
+                         unknown_without_refs=cc["screen_unknown_without_refs"])
     if not np.array_equal(curv["event_id"].to_numpy(), events["event_id"].to_numpy()):
         raise RuntimeError("forman_screen returned rows out of canonical order")
+    n_unknown = int(curv["forman"].isna().sum())  # cited work with no reference at t (screen_unknown_without_refs)
     train = np.asarray(split) == "train"
     th = screen_thresholds(curv, train, cc["screen_percentile_low"], cc["screen_percentile_high"],
                            inclusive=cc["screen_inclusive_ties"])
     curv = apply_screen(curv, th)
     n_screen = int(curv["escalated"].sum())
     stats = {"mode": mode, "n_events": int(len(curv)), "n_screen_flagged": n_screen,
-             "screen_rate": n_screen / max(len(curv), 1), "screen_s": time.perf_counter() - t0}
+             "screen_rate": n_screen / max(len(curv), 1), "n_screen_unknown": n_unknown,
+             "screen_s": time.perf_counter() - t0}
     if mode == "screen":
         curv["escalated"] = False
     elif mode == "random+orc":

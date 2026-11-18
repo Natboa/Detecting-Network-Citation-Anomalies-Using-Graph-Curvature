@@ -24,6 +24,19 @@ Edge cases, handled explicitly:
   counts rows instead (the multigraph degree that EventStore.degrees_at()
   reports).
 
+Unknown values (unknown_without_refs=True; ledger G13, 2026-11-18). The event
+table cannot tell a cited work that has no references from one whose reference
+list is not known: OpenAlex serves no record for some cited ids, returns an
+empty list for others, and both give out_deg_t(dst) = 0 and F = 2 - in_deg_t(src),
+the maximum of the screen. On the pilot 40,173 of the 45,227 events at F >= 2
+cited such a work. With the option on, F is NaN whenever out_deg_t(dst) = 0 at
+the event's time: no evidence instead of a value (docs/score_components.md D10).
+The rule reads the same counts as F, so it uses nothing after t(e); a cited
+work whose first known reference is dated after t(e) is unknown at t(e).
+NaN rows enter no threshold, are never escalated (so they get no ORC value)
+and are left out of the distribution report. The default is off: the function
+then returns the plain Forman value for every row.
+
 Leak argument (NFR3): F(e) reads only rows with ts <= t(e) and never the
 scored row itself; nothing after t(e) enters. Same-t rows of other events are
 included by the project-wide policy; a module needing ts < t must filter itself.
@@ -63,13 +76,15 @@ def _count_upto(sorted_keys, node, tt, span):
     return np.searchsorted(sorted_keys, base + tt, "right") - np.searchsorted(sorted_keys, base, "left")
 
 
-def forman_screen(events, *, count_duplicates=False) -> pd.DataFrame:
+def forman_screen(events, *, count_duplicates=False, unknown_without_refs=False) -> pd.DataFrame:
     """Unweighted directed Forman curvature of every event at its own time.
 
     events: DataFrame with event_id (unique), src_id, dst_id, t (int days).
     count_duplicates: False (default) = distinct-neighbour degrees; True = row
     counts. See the module docstring for the self-loop / duplicate rules and
     the leak argument.
+    unknown_without_refs: True writes NaN where out_deg_t(dst) is 0 (the module
+    docstring, "Unknown values"); False (default) keeps F = 2 - in_deg_t(src).
 
     Returns the curvature-cache frame (CURVATURE_COLUMNS) in canonical order
     (t, event_id): forman filled, orc NaN, escalated False, radius NaN,
@@ -111,6 +126,8 @@ def forman_screen(events, *, count_duplicates=False) -> pd.DataFrame:
             in_src = in_src - own
             out_dst = out_dst - own
         forman[:] = 2.0 - in_src - out_dst
+        if unknown_without_refs:
+            forman[out_dst == 0] = np.nan
 
     out = ev.copy()
     out["forman"] = forman
@@ -121,10 +138,12 @@ def forman_screen(events, *, count_duplicates=False) -> pd.DataFrame:
     return out[CURVATURE_COLUMNS]
 
 
-def spot_check(events, curv, n=20, seed=0) -> pd.DataFrame:
+def spot_check(events, curv, n=20, seed=0, *, unknown_without_refs=False) -> pd.DataFrame:
     """Recompute F for n random events with direct boolean filtering (an
     independent code path, O(E) per event) and compare with curv["forman"].
-    Uses the default distinct-neighbour semantics. S2.2 verify step."""
+    Uses the default distinct-neighbour semantics. unknown_without_refs: the
+    option curv was computed with; when True the recomputed value is NaN where
+    the cited work has no reference at t, and NaN matches NaN. S2.2 verify step."""
     ev = _canonical(events)
     rng = np.random.default_rng(seed)
     ids = rng.choice(curv["event_id"].to_numpy(), size=min(n, len(curv)), replace=False)
@@ -136,9 +155,10 @@ def spot_check(events, curv, n=20, seed=0) -> pd.DataFrame:
         ctx = ev[(ev["t"] <= r["t"]) & (ev["event_id"] != eid)]
         in_s = ctx.loc[ctx["dst_id"] == r["src_id"], "src_id"].nunique()
         out_d = ctx.loc[ctx["src_id"] == r["dst_id"], "dst_id"].nunique()
-        val = 2.0 - in_s - out_d
-        rows.append({"event_id": int(eid), "forman": float(cached.loc[eid]), "recomputed": val,
-                     "match": bool(cached.loc[eid] == val)})
+        val = np.nan if unknown_without_refs and out_d == 0 else 2.0 - in_s - out_d
+        got = float(cached.loc[eid])
+        rows.append({"event_id": int(eid), "forman": got, "recomputed": val,
+                     "match": bool(got == val or (np.isnan(got) and np.isnan(val)))})
     return pd.DataFrame(rows)
 
 
