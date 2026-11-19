@@ -23,6 +23,7 @@ from citecurv.data.cited import (
     prior_citation_counts,
     pull_works_by_ids,
     resolve_id_filter,
+    works_with_text,
 )
 
 
@@ -519,3 +520,36 @@ def test_an_output_with_no_found_work_is_an_empty_file_with_the_columns(tmp_path
     df = pd.read_parquet(out)
     assert len(df) == 0 and list(df.columns) == ["work_id", "title", "abstract", "pub_date", "n_refs", "ref_ids"]
     assert stats["n_found"] == 0 and stats["n_missing"] == 3 and stats["n_ref_ids"] == 0
+
+
+def _text_frame():
+    return pd.DataFrame({
+        "work_id": ["W1", "W2", "W3", "W4", "W5", "W6"],
+        "title": ["A title", None, "  ", "Only a title", np.nan, ""],
+        "abstract": ["An abstract", "Abstract without a title", None, "   ", np.nan, ""],
+        "pub_date": ["2015-01-02"] * 6,
+        "n_refs": [0] * 6,
+    })
+
+
+def test_works_with_text_keeps_the_works_that_have_a_title_or_an_abstract_in_input_order():
+    kept, stats = works_with_text(_text_frame())
+    assert list(kept.columns) == ["work_id", "title", "abstract"]
+    assert kept["work_id"].tolist() == ["W1", "W2", "W4"]
+    assert kept.index.tolist() == [0, 1, 2]
+    assert stats == {"n_works": 6, "n_with_text": 3, "n_with_abstract": 2, "n_title_only": 1, "n_without_text": 3}
+
+
+def test_works_with_text_leaves_the_input_frame_alone_and_takes_an_empty_one():
+    df = _text_frame()
+    before = df.copy()
+    works_with_text(df)
+    pd.testing.assert_frame_equal(df, before)
+    kept, stats = works_with_text(df.iloc[:0])
+    assert len(kept) == 0 and list(kept.columns) == ["work_id", "title", "abstract"]
+    assert stats == {"n_works": 0, "n_with_text": 0, "n_with_abstract": 0, "n_title_only": 0, "n_without_text": 0}
+
+
+def test_works_with_text_needs_the_three_columns():
+    with pytest.raises(ValueError, match="abstract"):
+        works_with_text(pd.DataFrame({"work_id": ["W1"], "title": ["T"]}))

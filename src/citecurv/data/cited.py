@@ -458,3 +458,27 @@ def reference_events(refs, *, exclude_src=None, start_event_id: int = 0):
                         "src_id": src, "dst_id": dst, "t": t})
     stats.update(n_rows=int(len(out)), n_ref_ids_dropped_no_date=int(n_listed[no_date].sum()))
     return out, stats
+
+
+TEXT_COLUMNS = ["work_id", "title", "abstract"]
+
+
+def works_with_text(works):
+    """(frame, stats): the works that have a non-blank title or abstract, ready for the encoder.
+
+    works: a frame with work_id, title and abstract, e.g. `cited_works.parquet` or the text
+    columns of `cited_joint.parquet`. A work with neither would get the vector of an empty text,
+    so it stays without a vector instead. The result has TEXT_COLUMNS, the input order and a
+    fresh index; the input frame is not changed.
+    Stats: n_works, n_with_text, n_with_abstract, n_title_only, n_without_text.
+    """
+    missing = [c for c in TEXT_COLUMNS if c not in works.columns]
+    if missing:
+        raise ValueError(f"works is missing column(s) {missing}; need {TEXT_COLUMNS}")
+    has_title = works["title"].fillna("").astype(str).str.strip().ne("")
+    has_abstract = works["abstract"].fillna("").astype(str).str.strip().ne("")
+    keep = has_title | has_abstract
+    stats = {"n_works": int(len(works)), "n_with_text": int(keep.sum()),
+             "n_with_abstract": int(has_abstract.sum()), "n_title_only": int((has_title & ~has_abstract).sum()),
+             "n_without_text": int((~keep).sum())}
+    return works.loc[keep, TEXT_COLUMNS].reset_index(drop=True), stats
