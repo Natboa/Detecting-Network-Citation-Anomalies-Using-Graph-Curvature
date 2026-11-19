@@ -188,8 +188,19 @@ cache computed without the cited works' reference lists is not picked up by mist
 Memory: on the pilot (606,129 events and 11,633,195 context rows) loading, building the context rows and
 one screen peaked at 2,983 MB on the laptop in 19.5 s. The full run has about 4.6 times the rows (7,956,456
 events and 47,836,643 reference ids), so about 14 GB by that rate: an estimate from the laptop, not a
-measurement in Colab, and it is more than a standard runtime has. The EventStore behind the ORC subgraphs
-holds every row as Python objects and was not measured at that size.
+measurement in Colab, and it is more than a standard runtime has. Measured in Colab on 2026-11-19 on a
+High-RAM CPU runtime (50.99 GB, about 0.26 units an hour): the full run's screen with 47,787,373 context
+rows took 66.6 s to load and build the rows and 124.6 s for the screen, with a peak RSS of 12.15 GB; a spot
+check of 5 events raised the peak to 13.82 GB. A standard runtime (12.67 GB) is too small by a little; High-RAM
+has room to spare. The EventStore behind the ORC subgraphs
+holds every row as Python objects. Measured on the laptop on 2026-11-19 with the pilot's 12,239,324 rows
+(events plus context): built in 59 s, about 4,078 MB added, 349 bytes a row (393 on a quarter of the rows).
+At about 55.8 million rows that is about 19.5 GB for the store, next to the frames it is built from: an
+estimate, more than a standard runtime has and within a High-RAM one. Subgraphs of 300 sampled pilot events:
+radius 1 took 4.1 ms each (edges median 573, 95th percentile 4,214, largest 186,092); radius 2 took 955 ms
+each (median 178,156 edges, largest 3,205,440) and pushed the process to a peak of 11 GB. With the context
+rows in the graph, radius 2 is out of reach at full size; radius 1 is exact when the citing work is uncited
+at t, which held for 500,595 of the 606,129 pilot events.
 
 **40_tgn (DyGLib TGN).** DyGLib has no mid-run resume. `train_tgn` runs DyGLib in a child process
 with its work folder on local disk; the best-on-validation checkpoint is moved into the run folder
