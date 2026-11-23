@@ -246,7 +246,10 @@ def to_jodie(
                 raise ValueError(f"reduce_to={reduce_to} must be between 1 and the width {vectors.shape[1]} (exclusive)")
             fit_rows = src_rows
             if fit_ids is not None:
-                fit_rows = src_rows[np.isin(work_ids[present], np.asarray(list(fit_ids)).astype(str))]
+                # both sides as str arrays: with an object array on either side numpy's isin loops in
+                # Python over every pair (1.4 million fit ids x 1.8 million works never finished, 2026-11-23)
+                fit_rows = src_rows[np.isin(np.asarray(work_ids[present]).astype(str),
+                                            np.asarray(list(fit_ids)).astype(str))]
             n_fit = len(fit_rows)
             if k > n_fit:
                 raise ValueError(f"reduce_to={k} needs at least {k} fitted works; got {n_fit}")

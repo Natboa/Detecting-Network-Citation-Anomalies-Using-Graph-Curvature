@@ -342,3 +342,35 @@ def test_pca_fit_ids_let_cited_only_works_into_the_fit(tmp_path):
     assert sorted(fit) == ["P0", "P1", "P2", "P3"]
     meta = to_jodie(events, (ids, vecs), tmp_path, "rd", reduce_to=2, fit_ids=fit)
     assert meta["node_feat_reduction"]["n_fit"] == 4 and meta["node_feat_reduction"]["fit_restricted"] is True
+
+
+# --- the fit-set lookup at full size (2026-11-23) ------------------------------------------------
+# The full run's rehearsal sat for over ten minutes at one line: the lookup of the fit ids among the
+# graph's works. The works come from pd.unique (an object array), and numpy's isin with an object
+# array on either side compares every fit id against every work in a Python-level loop, so 1.4
+# million fit ids against 1.8 million works never finished. The lookup now runs on two str arrays.
+
+def test_fit_ids_lookup_is_not_quadratic(tmp_path):
+    import time
+
+    n = 60_000                     # the old lookup took 6.7 s at 30,000 works on the laptop and grows with n squared
+    events, ids, vecs = _structured_fixture(n=n, d=4)
+    from citecurv.tgn.convert import pca_fit_ids
+
+    fit = pca_fit_ids(events, int(events["t"].quantile(0.7)))      # an object array, as in the notebook
+    t0 = time.perf_counter()
+    meta = to_jodie(events, (ids, vecs), tmp_path, "big", reduce_to=2, fit_ids=fit)
+    elapsed = time.perf_counter() - t0
+    assert meta["node_feat_reduction"]["n_fit"] == len(set(fit))
+    assert elapsed < 5.0, f"to_jodie took {elapsed:.1f} s on {n} works"
+
+
+def test_fit_ids_as_list_or_object_array_give_the_same_bytes(tmp_path):
+    events, ids, vecs = _structured_fixture(n=60)
+    from citecurv.tgn.convert import pca_fit_ids
+
+    fit = pca_fit_ids(events, 300)
+    a, b = tmp_path / "a", tmp_path / "b"
+    to_jodie(events, (ids, vecs), a, "fx", reduce_to=3, fit_ids=fit)
+    to_jodie(events, (ids, vecs), b, "fx", reduce_to=3, fit_ids=[str(x) for x in fit])
+    assert (a / "ml_fx_node.npy").read_bytes() == (b / "ml_fx_node.npy").read_bytes()
