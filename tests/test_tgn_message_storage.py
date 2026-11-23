@@ -18,6 +18,8 @@ Spec under test:
 Torch tests skip without torch (pytest.importorskip).
 """
 
+import sys
+
 import numpy as np
 import pytest
 
@@ -89,3 +91,67 @@ def test_stored_message_equals_its_row_of_the_batch():
         assert _owns_storage(m)
         assert torch.equal(m, full[i]) and t == ts[b][i]
     assert set(int(x) for x in u) == set(int(x) for x in np.unique(src[b]))
+
+
+# --- patch P10: a node keeps only its last pending message --------------------------------------
+# With P9 the GPU memory still grew by about 0.55 MB per step on the full run (T4, 2026-11-23): a
+# citing paper with 25 references gets 25 messages in its step and keeps all of them until it
+# appears again, which for most papers is never. The only reader, MessageAggregator.aggregate_messages
+# (also behind P8's LazyUpdatedMemories), takes the last message of a node and only asks whether the
+# list is empty, so keeping the last message alone changes no value.
+
+def _train_trace(model, ev):
+    backbone, predictor = model[0], model[1]
+    opt = torch.optim.Adam(model.parameters(), lr=1e-2)
+    model.train()
+    backbone.memory_bank.__init_memory_bank__()
+    torch.manual_seed(3)
+    trace = []
+    for b_src, b_dst, b_t, b_eid, b_neg in batches(ev):
+        ns, nd = backbone.compute_src_dst_node_temporal_embeddings(b_src, b_neg, b_t, None, edges_are_positive=False,
+                                                                   num_neighbors=3)
+        ps, pd = backbone.compute_src_dst_node_temporal_embeddings(b_src, b_dst, b_t, b_eid, edges_are_positive=True,
+                                                                   num_neighbors=3)
+        pos = predictor(input_1=ps, input_2=pd).squeeze(-1).sigmoid()
+        neg = predictor(input_1=ns, input_2=nd).squeeze(-1).sigmoid()
+        loss = torch.nn.BCELoss()(torch.cat([pos, neg]), torch.cat([torch.ones_like(pos), torch.zeros_like(neg)]))
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+        backbone.memory_bank.detach_memory_bank()
+        trace.append((loss.item(), torch.cat([ns, nd, ps, pd]).detach().clone()))
+    return trace
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_a_node_keeps_at_most_one_pending_message(lazy):
+    model, ev = build(lazy)
+    _train_trace(model, ev)
+    lengths = [len(v) for v in model[0].memory_bank.node_raw_messages.values()]
+    assert max(lengths) == 1
+    src, _, _, _ = ev
+    assert np.bincount(src).max() > 1   # the stream has papers with several references in one step
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_keeping_the_last_message_changes_no_result(lazy, monkeypatch):
+    model, ev = build(lazy)
+    new = _train_trace(model, ev)
+    MemoryBank = sys.modules["models.MemoryModel"].MemoryBank   # loaded by build()
+
+    def keep_all(self, node_ids, new_node_raw_messages):   # upstream store_node_raw_messages (plus P8's tracking)
+        for node_id in node_ids:
+            self.node_raw_messages[node_id].extend(new_node_raw_messages[node_id])
+        if self.track_undetached:
+            self.undetached_node_ids.update(node_ids)
+
+    monkeypatch.setattr(MemoryBank, "store_node_raw_messages", keep_all)
+    model_ref, ev = build(lazy)
+    ref = _train_trace(model_ref, ev)
+    assert max(len(v) for v in model_ref[0].memory_bank.node_raw_messages.values()) > 1   # the reference kept them all
+    assert len(new) == len(ref) > 5
+    for (l_new, e_new), (l_ref, e_ref) in zip(new, ref):
+        assert l_new == l_ref
+        assert torch.equal(e_new, e_ref)
+    for (k, p_new), (_, p_ref) in zip(model.state_dict().items(), model_ref.state_dict().items()):
+        assert torch.equal(p_new, p_ref), k

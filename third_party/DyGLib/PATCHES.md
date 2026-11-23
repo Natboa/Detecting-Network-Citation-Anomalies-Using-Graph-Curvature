@@ -30,6 +30,7 @@ confirmed failing on the unpatched code (Python 3.12.3, torch 2.15.0, see "Verif
 | P7 | `train_link_prediction.py`, `utils/load_configs.py` | the citecurv seed list (one run per seed) | `--seed_offset 0`: upstream seeds |
 | P8 | `models/MemoryModel.py`, `train_link_prediction.py`, `utils/load_configs.py` | training time on graphs with many nodes (same results) | off by default (no `--lazy_memory`): upstream code path; citecurv turns it on |
 | P9 | `models/MemoryModel.py` | GPU memory on graphs where most nodes appear once (same values) | always on; no switch |
+| P10 | `models/MemoryModel.py` | GPU memory when a node gets many messages in one step (same values) | always on; no switch |
 
 ### P1: feature widths derived from the data
 
@@ -229,6 +230,28 @@ the forward values, gradients and later updates are those of upstream. It adds o
 message (two per event). Tests: `tests/test_tgn_message_storage.py` checks that every stored message
 owns its storage after training steps and after a `no_grad` replay (failed on the unpatched code:
 each message's storage was its whole batch), and that a stored message equals its row of the batch.
+
+### P10: a node keeps only its last pending message
+
+Problem (measured 2026-11-23 on the full run with P9, T4): GPU memory still grew by about 0.55 MB
+per training step. A node gets one message per event it takes part in, so a citing paper with 25
+references gets 25 messages in its step and keeps all of them until it appears again, which for
+most papers is never.
+
+`models/MemoryModel.py`, `MemoryBank.store_node_raw_messages`:
+
+- before: `self.node_raw_messages[node_id].extend(new_node_raw_messages[node_id])`
+- after: `self.node_raw_messages[node_id] = (self.node_raw_messages[node_id] + new_node_raw_messages[node_id])[-1:]`
+
+Why the values do not change: the only reader of the stored lists is
+`MessageAggregator.aggregate_messages` (also called by P8's `LazyUpdatedMemories`), which takes the
+last message and its time and otherwise only asks whether the list is empty; `backup_memory_bank`
+and `reload_memory_bank` copy the lists as they are. A node therefore holds at most one message,
+and the memory kept for messages is bounded by the number of nodes. Tests in
+`tests/test_tgn_message_storage.py`: no node holds more than one message after training steps
+(failed on P9 alone on Colab), and a training pass with the patch gives exactly the same losses,
+embeddings and weights (`torch.equal`) as one with upstream's keep-all storing, lazy memory on and
+off.
 
 ## Verification
 

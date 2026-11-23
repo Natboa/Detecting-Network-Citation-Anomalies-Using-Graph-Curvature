@@ -445,7 +445,8 @@ class MemoryBank(nn.Module):
         :return:
         """
         for node_id in node_ids:
-            self.node_raw_messages[node_id].extend(new_node_raw_messages[node_id])
+            # citecurv P10: keep only the last message; MessageAggregator (the only reader) uses the last one alone
+            self.node_raw_messages[node_id] = (self.node_raw_messages[node_id] + new_node_raw_messages[node_id])[-1:]  # citecurv P10
         if self.track_undetached:  # citecurv P8
             self.undetached_node_ids.update(node_ids)  # citecurv P8
 
