@@ -31,6 +31,7 @@ confirmed failing on the unpatched code (Python 3.12.3, torch 2.15.0, see "Verif
 | P8 | `models/MemoryModel.py`, `train_link_prediction.py`, `utils/load_configs.py` | training time on graphs with many nodes (same results) | off by default (no `--lazy_memory`): upstream code path; citecurv turns it on |
 | P9 | `models/MemoryModel.py` | GPU memory on graphs where most nodes appear once (same values) | always on; no switch |
 | P10 | `models/MemoryModel.py` | GPU memory when a node gets many messages in one step (same values) | always on; no switch |
+| P11 | `models/MemoryModel.py` | GPU memory of the memory-bank backups around validation (same values) | always on; no switch |
 
 ### P1: feature widths derived from the data
 
@@ -252,6 +253,31 @@ and the memory kept for messages is bounded by the number of nodes. Tests in
 (failed on P9 alone on Colab), and a training pass with the patch gives exactly the same losses,
 embeddings and weights (`torch.equal`) as one with upstream's keep-all storing, lazy memory on and
 off.
+
+### P11: the memory-bank backups live in CPU memory
+
+Problem (2026-11-23, first full training run on a T4 with P9 and P10): epoch 1 trained and validated,
+then `reload_memory_bank(train_backup_memory_bank)` (`train_link_prediction.py` line 289) stopped
+with CUDA out of memory (14.22 GiB allocated by PyTorch on a 14.56 GiB card). Around the validation
+passes DyGLib holds two backups of the whole memory bank (memories, last-update times and every
+pending message), and upstream keeps them on the GPU: the live bank plus two copies, about 4.6 GB
+each for 1.8 million nodes.
+
+`models/MemoryModel.py`, `MemoryBank.backup_memory_bank` and `reload_memory_bank`, and a module
+constant `BACKUP_CHUNK_ROWS = 65536`:
+
+- backup: memories and times are copied to CPU memory; messages are stacked in chunks of
+  `BACKUP_CHUNK_ROWS`, copied to the CPU in one transfer per chunk, and kept there one tensor per
+  message (nodes with no message get no entry).
+- reload: memories and times are copied back to the bank's own device; messages go back in stacked
+  chunks and each is cloned there into its own storage (as P9 requires).
+
+Why the values do not change: the copies are exact (no dtype change), and the restored bank holds
+the same memories, times and messages in the same order per node; an empty list and a missing key
+read the same through the `defaultdict`. Tests in `tests/test_tgn_message_storage.py`: the backup
+of a bank on the GPU is held in CPU memory (failed on P10 alone on Colab), and a backup, further
+steps and a reload restore the bank exactly, on the CPU and on the GPU, with every restored
+message on the bank's device in its own storage.
 
 ## Verification
 

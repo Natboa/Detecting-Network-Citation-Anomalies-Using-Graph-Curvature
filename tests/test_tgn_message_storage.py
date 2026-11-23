@@ -155,3 +155,87 @@ def test_keeping_the_last_message_changes_no_result(lazy, monkeypatch):
         assert torch.equal(e_new, e_ref)
     for (k, p_new), (_, p_ref) in zip(model.state_dict().items(), model_ref.state_dict().items()):
         assert torch.equal(p_new, p_ref), k
+
+
+# --- patch P11: the memory-bank backups live in CPU memory ---------------------------------------
+# The first full training run (T4, 2026-11-23) stopped with CUDA out of memory after epoch 1's
+# validation pass, in reload_memory_bank: DyGLib keeps two backups of the whole memory bank
+# (memories and every pending message) around the validation passes, and upstream keeps them on the
+# GPU, so the live bank and two copies (about 4.6 GB each for 1.8 million nodes) did not fit.
+
+def _cuda_model(lazy=True, d=8):
+    """build() from test_tgn_memory_scope, on the GPU (DyGLib keeps its feature tensors on the device
+    it is built for, so the model is built there rather than moved)."""
+    if not torch.cuda.is_available():
+        pytest.skip("needs a GPU: the backups must leave GPU memory")
+    from test_tgn_memory_scope import _dyglib, stream
+
+    MemoryModel, MergeLayer, Data, get_neighbor_sampler = _dyglib()
+    src, dst, ts, eid, n_nodes = stream()
+    rng = np.random.default_rng(1)
+    node_feat = rng.normal(size=(n_nodes, d)).astype(np.float32)
+    node_feat[0] = 0
+    edge_feat = np.ones((len(src) + 1, 1), dtype=np.float32)
+    edge_feat[0] = 0
+    edge_dst = np.zeros(len(src) + 1, dtype=np.longlong)
+    edge_dst[eid] = dst
+    data = Data(src_node_ids=src, dst_node_ids=dst, node_interact_times=ts, edge_ids=eid, labels=np.zeros(len(src)))
+    sampler = get_neighbor_sampler(data, sample_neighbor_strategy="recent")
+    torch.manual_seed(0)
+    backbone = MemoryModel(node_raw_features=node_feat, edge_raw_features=edge_feat, neighbor_sampler=sampler,
+                           time_feat_dim=4, model_name="TGN", num_layers=1, num_heads=2, dropout=0.1, device="cuda",
+                           direction_feat_index=0, edge_dst_node_ids=edge_dst, lazy_memory=lazy)
+    model = torch.nn.Sequential(backbone, MergeLayer(input_dim1=d, input_dim2=d, hidden_dim=d, output_dim=1)).to("cuda")
+    model.eval()
+    return model, (src, dst, ts, eid)
+
+
+def _fill(backbone, ev, steps=4, first=0):
+    """Replay ``steps`` batches of 20 events, starting at batch ``first`` (time only moves forward)."""
+    src, dst, ts, eid = ev
+    with torch.no_grad():
+        for s in range(20 * first, 20 * (first + steps), 20):
+            backbone.compute_src_dst_node_temporal_embeddings(src[s:s + 20], dst[s:s + 20], ts[s:s + 20], eid[s:s + 20],
+                                                              edges_are_positive=True, num_neighbors=3)
+
+
+def _bank_state(bank):
+    msgs = {int(k): [(m.detach().cpu().clone(), float(t)) for m, t in v] for k, v in bank.node_raw_messages.items() if v}
+    return bank.node_memories.detach().cpu().clone(), bank.node_last_updated_times.detach().cpu().clone(), msgs
+
+
+def test_backup_is_held_in_cpu_memory():
+    model, ev = _cuda_model()
+    bank = model[0].memory_bank
+    bank.__init_memory_bank__()
+    _fill(model[0], ev)
+    mem, times, msgs = bank.backup_memory_bank()
+    assert mem.device.type == "cpu" and times.device.type == "cpu"
+    stored = [m for v in msgs.values() for m, _ in v]
+    assert len(stored) > 10 and all(m.device.type == "cpu" for m in stored)
+
+
+@pytest.mark.parametrize("on_gpu", [False, True])
+def test_reload_restores_the_bank_exactly_on_its_device(on_gpu):
+    if on_gpu:
+        model, ev = _cuda_model()
+    else:
+        model, ev = build(lazy=True)
+    backbone = model[0]
+    bank = backbone.memory_bank
+    bank.__init_memory_bank__()
+    _fill(backbone, ev)
+    before = _bank_state(bank)
+    backup = bank.backup_memory_bank()
+    _fill(backbone, ev, steps=4, first=4)              # the bank moves on, as in a validation pass
+    bank.reload_memory_bank(backup)
+    after = _bank_state(bank)
+    assert torch.equal(after[0], before[0]) and torch.equal(after[1], before[1])
+    assert after[2].keys() == before[2].keys()
+    for k in before[2]:
+        assert [t for _, t in after[2][k]] == [t for _, t in before[2][k]]
+        assert all(torch.equal(a, b) for (a, _), (b, _) in zip(after[2][k], before[2][k]))
+    device = bank.node_memories.device
+    live = [m for v in bank.node_raw_messages.values() for m, _ in v]
+    assert all(m.device == device and _owns_storage(m) for m in live)
+    assert bank.node_memories.device == device and bank.node_last_updated_times.device == device

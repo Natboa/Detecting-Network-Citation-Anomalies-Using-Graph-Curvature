@@ -3,6 +3,8 @@ import numpy as np
 import torch.nn as nn
 from collections import defaultdict
 
+BACKUP_CHUNK_ROWS = 65536  # citecurv P11: messages per stacked copy between the GPU and the CPU-held backup
+
 from utils.utils import NeighborSampler
 from models.modules import TimeEncoder, MergeLayer, MultiHeadAttention
 
@@ -395,11 +397,17 @@ class MemoryBank(nn.Module):
         backup the memory bank, get the copy of current memories, node_last_updated_times and node_raw_messages
         :return:
         """
-        cloned_node_raw_messages = {}
-        for node_id, node_raw_messages in self.node_raw_messages.items():
-            cloned_node_raw_messages[node_id] = [(node_raw_message[0].clone(), node_raw_message[1].copy()) for node_raw_message in node_raw_messages]
+        # citecurv P11: the backup is held in CPU memory; messages travel in stacked chunks, not one copy per message
+        entries = [(node_id, node_raw_message) for node_id, node_raw_messages in self.node_raw_messages.items()  # citecurv P11
+                   for node_raw_message in node_raw_messages]  # citecurv P11
+        cloned_node_raw_messages = defaultdict(list)  # citecurv P11
+        for start in range(0, len(entries), BACKUP_CHUNK_ROWS):  # citecurv P11
+            part = entries[start:start + BACKUP_CHUNK_ROWS]  # citecurv P11
+            rows = torch.stack([node_raw_message[0].detach() for _, node_raw_message in part]).cpu()  # citecurv P11
+            for (node_id, node_raw_message), row in zip(part, rows):  # citecurv P11
+                cloned_node_raw_messages[node_id].append((row.clone(), node_raw_message[1].copy()))  # citecurv P11
 
-        return self.node_memories.data.clone(), self.node_last_updated_times.data.clone(), cloned_node_raw_messages
+        return self.node_memories.data.cpu().clone(), self.node_last_updated_times.data.cpu().clone(), cloned_node_raw_messages  # citecurv P11
 
     def reload_memory_bank(self, backup_memory_bank: tuple):
         """
@@ -407,11 +415,18 @@ class MemoryBank(nn.Module):
         :param backup_memory_bank: tuple (node_memories, node_last_updated_times, node_raw_messages)
         :return:
         """
-        self.node_memories.data, self.node_last_updated_times.data = backup_memory_bank[0].clone(), backup_memory_bank[1].clone()
+        device = self.node_memories.device  # citecurv P11: the backup may sit in CPU memory; the bank goes back to its device
+        self.node_memories.data = backup_memory_bank[0].to(device, copy=True)  # citecurv P11
+        self.node_last_updated_times.data = backup_memory_bank[1].to(device, copy=True)  # citecurv P11
 
         self.node_raw_messages = defaultdict(list)
-        for node_id, node_raw_messages in backup_memory_bank[2].items():
-            self.node_raw_messages[node_id] = [(node_raw_message[0].clone(), node_raw_message[1].copy()) for node_raw_message in node_raw_messages]
+        entries = [(node_id, node_raw_message) for node_id, node_raw_messages in backup_memory_bank[2].items()  # citecurv P11
+                   for node_raw_message in node_raw_messages]  # citecurv P11
+        for start in range(0, len(entries), BACKUP_CHUNK_ROWS):  # citecurv P11
+            part = entries[start:start + BACKUP_CHUNK_ROWS]  # citecurv P11
+            rows = torch.stack([node_raw_message[0] for _, node_raw_message in part]).to(device)  # citecurv P11
+            for (node_id, node_raw_message), row in zip(part, rows):  # citecurv P11
+                self.node_raw_messages[node_id].append((row.clone(), node_raw_message[1].copy()))  # citecurv P11 (P9: own storage)
 
     def detach_memory_bank(self):
         """
