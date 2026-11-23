@@ -255,7 +255,7 @@ class MemoryModel(torch.nn.Module):
         unique_node_ids = np.unique(src_node_ids)
 
         for i in range(len(src_node_ids)):
-            new_node_raw_messages[src_node_ids[i]].append((new_src_node_raw_messages[i], node_interact_times[i]))
+            new_node_raw_messages[src_node_ids[i]].append((new_src_node_raw_messages[i].clone(), node_interact_times[i]))  # citecurv P9
 
         return unique_node_ids, new_node_raw_messages
 

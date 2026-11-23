@@ -29,6 +29,7 @@ confirmed failing on the unpatched code (Python 3.12.3, torch 2.15.0, see "Verif
 | P6 | `utils/load_configs.py` | datasets not named after the 14 benchmarks | — |
 | P7 | `train_link_prediction.py`, `utils/load_configs.py` | the citecurv seed list (one run per seed) | `--seed_offset 0`: upstream seeds |
 | P8 | `models/MemoryModel.py`, `train_link_prediction.py`, `utils/load_configs.py` | training time on graphs with many nodes (same results) | off by default (no `--lazy_memory`): upstream code path; citecurv turns it on |
+| P9 | `models/MemoryModel.py` | GPU memory on graphs where most nodes appear once (same values) | always on; no switch |
 
 ### P1: feature widths derived from the data
 
@@ -204,6 +205,30 @@ memories, pending messages, one and two layers) and an inference replay with the
 off within 1e-5, checks that a step runs the GRU only on nodes it reads, and that no message keeps
 a gradient graph after `detach_memory_bank`; `tests/test_tgn_infer.py::
 test_patch_p8_changes_no_result_end_to_end` trains and scores the tiny stream both ways.
+
+### P9: a stored message owns its storage
+
+Problem (measured 2026-11-23 in the full run's rehearsal, T4, 1,829,387 nodes): GPU memory grew by
+about 0.85 MB per training step from the first step on, and training stopped with CUDA out of
+memory at step 14,700 of 20,868. `compute_new_node_raw_messages` stores each node's message as row
+`i` of the batch's message tensor, a view, and `MemoryBank.detach_memory_bank` replaces it with
+`.detach()`, still a view of the same storage. One kept message therefore keeps the whole batch
+tensor on the GPU. A node's messages are cleared only when the node appears again; in a citation
+stream most cited works appear once, so every batch tensor stayed. Under `torch.no_grad`
+(validation, the inference replay) the same happens without any detach.
+
+`models/MemoryModel.py` line 258:
+
+- before: `new_node_raw_messages[src_node_ids[i]].append((new_src_node_raw_messages[i], node_interact_times[i]))`
+- after: the same with `new_src_node_raw_messages[i].clone()`, so each message has its own storage
+  and the batch tensor is freed with the batch. Memory then grows with the number of messages kept
+  (at most about one per node), not with the number of steps.
+
+Why the values do not change: `clone` copies the row exactly and is the identity for autograd, so
+the forward values, gradients and later updates are those of upstream. It adds one small copy per
+message (two per event). Tests: `tests/test_tgn_message_storage.py` checks that every stored message
+owns its storage after training steps and after a `no_grad` replay (failed on the unpatched code:
+each message's storage was its whole batch), and that a stored message equals its row of the batch.
 
 ## Verification
 
