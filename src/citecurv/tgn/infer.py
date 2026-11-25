@@ -140,6 +140,43 @@ def load_event_scores(out_dir) -> pd.DataFrame:
     return pd.read_csv(out / "tgn_event_scores.csv")
 
 
+def merge_shuffled_tgn(orig_scores, orig_emb, shuf_scores, shuf_emb, events, cutoff):
+    """TGN outputs for the S4.3 shuffle check: events whose ORIGINAL t <= cutoff keep the original scores and
+    embeddings, the others take those of the shuffled stream, aligned by event_id, in the original order.
+
+    Pre-cutoff rows of the shuffled scoring should reproduce the original ones (the stream up to the cutoff is
+    unchanged); taking them from the original makes every train/val-fitted object identical by construction, and
+    the report gives the drift actually seen there, for the gate's drift rule. Consumes ``orig_emb``: its
+    arrays are overwritten in place (the peak stays at two embedding sets). Returns (scores, embeddings dict,
+    report {n_pre, n_test, pre_max_abs_diff_p_link, pre_max_abs_diff_neg_p_link}). Raises ValueError when the
+    event id sets differ.
+    """
+    o_ids = orig_scores["event_id"].to_numpy(dtype=np.int64)
+    s_ids = shuf_scores["event_id"].to_numpy(dtype=np.int64)
+    if (len(o_ids) != len(s_ids) or not np.array_equal(np.sort(o_ids), np.sort(s_ids))
+            or not np.array_equal(np.asarray(orig_emb["event_id"], dtype=np.int64), o_ids)
+            or len(np.asarray(shuf_emb["event_id"])) != len(s_ids)
+            or not np.array_equal(np.sort(np.asarray(shuf_emb["event_id"], dtype=np.int64)), np.sort(o_ids))):
+        raise ValueError("original and shuffled TGN outputs must cover the same event ids")
+    t_of = pd.Series(events["t"].to_numpy(dtype=np.int64), index=events["event_id"].to_numpy(dtype=np.int64))
+    pre = t_of.reindex(o_ids).to_numpy() <= int(cutoff)
+    s_pos = pd.Series(np.arange(len(s_ids)), index=s_ids).reindex(o_ids).to_numpy()
+    e_pos = pd.Series(np.arange(len(s_ids)), index=np.asarray(shuf_emb["event_id"], dtype=np.int64)).reindex(o_ids)
+    e_pos = e_pos.to_numpy()
+    merged = orig_scores.copy()
+    report = {"n_pre": int(pre.sum()), "n_test": int((~pre).sum())}
+    for col in ("p_link", "neg_p_link"):
+        o = merged[col].to_numpy(dtype=float)
+        s = shuf_scores[col].to_numpy(dtype=float)[s_pos]
+        report[f"pre_max_abs_diff_{col}"] = float(np.max(np.abs(o[pre] - s[pre]))) if pre.any() else 0.0
+        o = o.copy()
+        o[~pre] = s[~pre]
+        merged[col] = o
+    for key in ("z_src", "z_dst"):
+        orig_emb[key][~pre] = np.asarray(shuf_emb[key])[e_pos[~pre]]
+    return merged, orig_emb, report
+
+
 def infer_tgn(
     run_dir,
     data_dir,
