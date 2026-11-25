@@ -130,7 +130,8 @@ def test_tables_unchanged_by_report_records_and_new_tables_render(tmp_path):
     fx = load_fixture()
     data = {"events": fx["events"], "works": fx["works"], "embeddings": fx["embeddings"],
             "event_labels": fx["event_labels"], "cutoff": 19180}
-    A.run_matrix(["full", "no_curvature", "forman_only"], [0, 1], data, tmp_path, cfg=cfg_small(), orc_fn=FakeORC())
+    A.run_matrix(["full", "no_curvature", "forman_only"], [0, 1], data, tmp_path, cfg=cfg_small(), orc_fn=FakeORC(),
+                 tags={"level": "real"})
     before = A.tables(tmp_path)
     fx["events"].to_parquet(tmp_path / "events.parquet")
     lab = fx["event_labels"].assign(via_src=fx["event_labels"]["label"], via_dst=0)
@@ -141,11 +142,155 @@ def test_tables_unchanged_by_report_records_and_new_tables_render(tmp_path):
     assert recs and all(r["kind"] == "report" for r in recs)
     after = A.tables(tmp_path)
     for name in ("main", "ablation", "label_views", "curvature_delta"):
-        cols = [c for c in before[name].columns]
+        cols = [c for c in before[name].columns if c != "interval verdict"]  # the verdict is the intended change
         pd.testing.assert_frame_equal(before[name][cols].reset_index(drop=True),
                                       after[name][cols].reset_index(drop=True))
     iv = after["ablation_intervals"]
     assert {"full - no_curvature", "full - forman_only"} <= set(iv["comparison"])
     assert "excludes 0" in iv.columns and "stale" in iv.columns and not iv["stale"].any()
     assert "interval verdict" in after["curvature_delta"].columns
+    cd = after["curvature_delta"].set_index("metric")["interval verdict"]
+    assert cd["AP"].startswith("interval") and cd["AUROC"].startswith("interval")
+    assert cd["P@100"] == "no interval"  # intervals cover AP and AUROC only
     assert "seed varies" in after["ablation"].columns
+
+
+# ------------------------------------------------------------------ final review fixes (I3, I4, I6, I9, I10)
+
+def test_all_nan_side_gives_no_interval():
+    events, labels, a, b = concentrated()
+    b["total"] = np.nan
+    res = R.paired_paper_bootstrap([(a, b)], labels, R.cluster_keys(events, labels), n_draws=20)
+    assert np.isnan(res["delta"]) and np.isnan(res["lo"]) and np.isnan(res["hi"])
+    rec = R.interval_record(("x", "y"), "scored:ap", res, -1, [])
+    assert rec["excludes_0"] is False
+
+
+def test_partly_nan_rows_are_dropped_on_both_sides():
+    events, labels, a, b = concentrated()
+    b.loc[:9, "total"] = np.nan
+    res = R.paired_paper_bootstrap([(a, b)], labels, R.cluster_keys(events, labels), n_draws=5)
+    want = (R._Ranked(a["total"].iloc[10:], labels["label"].iloc[10:]).metrics()["ap"]
+            - R._Ranked(b["total"].iloc[10:], labels["label"].iloc[10:]).metrics()["ap"])
+    assert res["delta"] == pytest.approx(want)
+
+
+def test_draws_keep_seeds_apart():
+    events, labels, a0, b0 = concentrated(0)
+    _, _, a1, b1 = concentrated(1)
+    keys = R.cluster_keys(events, labels)
+    plain = R.paired_paper_bootstrap([(a0, b0), (a1, b1)], labels, keys, n_draws=40, seed=3)
+    a1s = a1.assign(total=a1["total"] + 100.0)
+    shifted = R.paired_paper_bootstrap([(a0, b0), (a1s, b1)], labels, keys, n_draws=40, seed=3)
+    assert shifted["lo"] == pytest.approx(plain["lo"]) and shifted["hi"] == pytest.approx(plain["hi"])
+
+
+def test_both_metrics_come_from_one_draw_loop():
+    events, labels, a, b = concentrated()
+    keys = R.cluster_keys(events, labels)
+    both = R.paired_paper_bootstrap_both([(a, b)], labels, keys, n_draws=30, seed=2)
+    for m in ("ap", "auroc"):
+        one = R.paired_paper_bootstrap([(a, b)], labels, keys, metric=m, n_draws=30, seed=2)
+        assert both[m]["lo"] == pytest.approx(one["lo"]) and both[m]["hi"] == pytest.approx(one["hi"])
+
+
+def test_row_mask_restricts_the_interval_rows():
+    events, labels, a, b = concentrated()
+    keys = R.cluster_keys(events, labels)
+    keep = pd.Series(np.r_[np.zeros(40, bool), np.ones(20, bool)], index=events["event_id"])
+    res = R.paired_paper_bootstrap([(a, b)], labels, keys, n_draws=5, row_mask=keep)
+    assert res["n_pos"] == 2
+
+
+def _run_folder(root, name, scores, level="real", escalated=None):
+    d = root / "runs" / name
+    d.mkdir(parents=True)
+    scores.to_parquet(d / "scores.parquet")
+    method, seed = name.rsplit("_", 1)
+    (d / "metrics.json").write_text(json.dumps({"kind": "model", "method": method, "seed": int(seed),
+                                                "tags": {"level": level}}))
+    if escalated is not None:
+        np.save(d / "escalated.npy", np.asarray(escalated, dtype=np.int64))
+    return d
+
+
+def test_orc_coverage_counts(tmp_path):
+    ids = np.arange(10)
+    sc = scores_frame(ids, np.linspace(1, 0, 10))
+    d = _run_folder(tmp_path, "full_0", sc, escalated=[1, 2, 3, 4])
+    labels = pd.DataFrame({"event_id": ids, "label": [0, 1, 1, 0, 1, 0, 0, 0, 0, 0],
+                           "via_src": [0, 1, 0, 0, 1, 0, 0, 0, 0, 0], "via_dst": [0, 0, 1, 0, 0, 0, 0, 0, 0, 0]})
+    rows = pd.DataFrame({"event_id": [1, 2, 3, 4], "orc": [-0.5, np.nan, -0.2, -0.1],
+                         "orc_lossy": [True, False, False, False], "orc_src_in_deg": [0, 0, 2, 0],
+                         "orc_error": ["", "boom", "", ""]})
+    cov = R.orc_coverage(d, rows, labels)
+    assert cov["n_escalated_test"] == 4 and cov["n_pos_with_orc"] == 2  # events 1 and 4 (event 2 has no value)
+    assert cov["n_pos_with_orc_via_src"] == 2 and cov["n_pos_with_orc_via_dst"] == 0
+    assert cov["lossy_share"] == 0.25 and cov["src_cited_share"] == 0.25 and cov["n_errors"] == 1
+
+
+def test_shuffle_components_record_shape():
+    value = {"matched": {"n_rows": 50, "base": {"total": {"auroc": 0.7, "ap": 0.2}, "s_temp": {"auroc": 0.6, "ap": 0.1}},
+                         "shuffled": {"total": {"auroc": 0.55, "ap": 0.12}, "s_temp": {"auroc": 0.5, "ap": 0.05}}}}
+    rec = R.shuffle_components_record(value, {"delta": 0.15, "lo": 0.05, "hi": 0.25}, 0, [])
+    assert rec["components"]["s_temp"]["shuffled"]["auroc"] == 0.5 and rec["n_rows"] == 50
+    t = A.tables([{"kind": "model", "method": "full", "seed": 0, "tags": {"level": "real"}, "test": {"ap": 0.1}}, rec])
+    assert set(t["shuffle_components"]["component"]) == {"total", "s_temp"}
+
+
+def test_control_readings_on_known_and_cold_rows(tmp_path):
+    ids = np.arange(30)
+    sc = pd.concat([scores_frame(ids[:10], np.linspace(1, 0, 10), split="val"),
+                    scores_frame(ids[10:20], np.linspace(1, 0, 10)),
+                    scores_frame(ids[20:], np.full(10, np.nan), cold=True, total_cold=np.linspace(1, 0, 10))],
+                   ignore_index=True)
+    d = _run_folder(tmp_path, "full_0", sc)
+    labels = pd.DataFrame({"event_id": ids, "label": ([1, 1] + [0] * 8) * 3})
+    score = np.r_[np.linspace(1, 0, 10), np.r_[np.nan, np.linspace(1, 0, 9)], np.linspace(1, 0, 10)]
+    ctl = pd.DataFrame({"event_id": ids, "score": score})
+    known = pd.Series(np.r_[np.ones(15, bool), np.zeros(15, bool)], index=ids)
+    rec = R.control_records(d, {"c": ctl}, labels, known=known)[0]
+    assert rec["direction"] == 1 and rec["n_nan_test"] == 1
+    assert rec["on_known"]["control"]["n"] == 5 and "full" in rec["on_known"]
+    assert rec["on_cold"]["control"]["n"] == 10 and rec["on_cold"]["full"]["auroc"] == pytest.approx(1.0)
+
+
+def test_run_report_branches_aliases_and_checkpoints(tmp_path, monkeypatch):
+    events, labels, a, b = concentrated()
+    real = tmp_path / "real"
+    for s in (0, 1):
+        _run_folder(real, f"full_{s}", a, escalated=[0, 1, 2])
+        _run_folder(real, f"no_curvature_{s}", b, escalated=[])
+        _run_folder(real, f"no_temporal_{s}", b, escalated=[])
+        _run_folder(tmp_path / "keep", f"no_temporal_{s}", a, escalated=[])
+    events.to_parquet(tmp_path / "events.parquet")
+    labels.to_parquet(tmp_path / "labels.parquet")
+    pd.DataFrame({"event_id": events["event_id"], "keep": np.r_[np.zeros(40, bool), np.ones(20, bool)]}).to_parquet(
+        tmp_path / "mask_x.parquet")
+    pd.DataFrame({"event_id": events["event_id"], "score": np.arange(60, dtype=float)}).to_parquet(tmp_path / "c.parquet")
+    pd.DataFrame({"event_id": events["event_id"], "ref_known": True}).to_parquet(tmp_path / "known.parquet")
+    pd.DataFrame({"event_id": [0, 1, 2], "orc": [-0.1, -0.2, np.nan], "orc_lossy": False, "orc_src_in_deg": 0,
+                  "orc_error": ""}).to_parquet(tmp_path / "orc.parquet")
+    spec = {"runs": str(real), "labels": str(tmp_path / "labels.parquet"), "events": str(tmp_path / "events.parquet"),
+            "seeds": [0, 1], "n_draws": 10, "aliases": {"no_temporal_keep_temp": [str(tmp_path / "keep"), "no_temporal"]},
+            "comparisons": [["full", "no_curvature"], ["full", "no_temporal_keep_temp"],
+                            ["no_temporal_keep_temp", "no_temporal"]],
+            "masks": {"x": str(tmp_path / "mask_x.parquet")}, "mask_notes": {"x": "drops the V citations"},
+            "controls": {"c": str(tmp_path / "c.parquet")}, "known": str(tmp_path / "known.parquet"),
+            "orc": str(tmp_path / "orc.parquet")}
+    recs = R.run_report(spec)
+    comps = {tuple(r["comparison"]) for r in recs if r["tags"]["group"] == "interval"}
+    assert ("full", "no_temporal_keep_temp") in comps and ("no_temporal_keep_temp", "no_temporal") in comps
+    assert any(r.get("view", "").startswith("mask:x:") for r in recs if r["tags"]["group"] == "interval")
+    assert any(r.get("note") == "drops the V citations" for r in recs if r["tags"]["group"] == "masked_view")
+    assert any(r["tags"]["group"] == "orc_coverage" for r in recs)
+    assert any(r["kind"] == "control" and r["method"] == "c" for r in recs)
+    assert all(r["tags"]["level"] == "real" for r in recs)
+
+    def boom(*a, **k):
+        raise AssertionError("recomputed")
+
+    monkeypatch.setattr(R, "_bootstrap", boom)
+    again = R.run_report(spec)  # every interval record exists: nothing is recomputed
+    assert len([r for r in again if r["tags"]["group"] == "interval"]) == len(
+        [r for r in recs if r["tags"]["group"] == "interval"])

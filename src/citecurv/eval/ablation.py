@@ -643,13 +643,27 @@ def _interval_verdict(r) -> str:
     return f"{word} [{lo:+.4f}, {hi:+.4f}]"
 
 
+_STALE_MEMO: dict = {}
+
+
 def _stale(r) -> bool:
-    """True when a file a derived record read has changed since (missing files are not judged)."""
+    """True when a file a derived record read has changed since (missing files are not judged). Hashes are
+    memoized per (path, size, mtime), so many records on the same large file cost one read."""
     import hashlib
 
     for path, digest in (r.get("inputs") or {}).items():
         p = Path(path)
-        if p.is_file() and hashlib.sha256(p.read_bytes()).hexdigest() != digest:
+        if not p.is_file():
+            continue
+        st = p.stat()
+        key = (str(p), st.st_size, st.st_mtime_ns)
+        if key not in _STALE_MEMO:
+            h = hashlib.sha256()
+            with open(p, "rb") as f:
+                for block in iter(lambda: f.read(1 << 22), b""):
+                    h.update(block)
+            _STALE_MEMO[key] = h.hexdigest()
+        if _STALE_MEMO[key] != digest:
             return True
     return False
 
