@@ -305,6 +305,51 @@ def to_jodie(
     return meta
 
 
+def shuffle_dyglib_dataset(data_dir, name: str, shuffled_t: pd.DataFrame, out_dir, out_name: str) -> dict:
+    """Write ``ml_<out_name>.*`` in ``out_dir``: the DyGLib dataset ``name`` of ``data_dir`` with new event times
+    (the S4.3 timestamp-shuffle check scores this stream with a checkpoint trained on the original).
+
+    shuffled_t: frame ``event_id, t`` covering exactly the dataset's events (e.g. the output of
+    ``pipeline.shuffle_test_timestamps``). The node feature file and the idmap's ``work_id`` array are copied
+    unchanged: the checkpoint reads node features by node index, so a re-run of ``to_jodie`` (node index = first
+    appearance, which the new times change) would feed it other nodes' features. Events are re-sorted by
+    (t, event_id) with their new t; each keeps its ``u``, ``i`` and edge-feature row; ``idx`` is renumbered
+    1..M; the idmap's ``event_id`` follows the new order. Raises ValueError when the event id sets differ.
+    Returns the new meta (``n_moved`` = events whose t changed, ``source_name``).
+    """
+    import shutil
+
+    data_dir, out = Path(data_dir), Path(out_dir)
+    df = pd.read_csv(data_dir / f"ml_{name}.csv", index_col=0)
+    edge = np.load(data_dir / f"ml_{name}.npy")
+    with np.load(data_dir / f"ml_{name}_idmap.npz", allow_pickle=False) as z:
+        work_id, eid = z["work_id"], z["event_id"].astype(np.int64)
+    new = pd.Series(shuffled_t["t"].to_numpy(dtype=np.int64), index=shuffled_t["event_id"].to_numpy(dtype=np.int64))
+    if new.index.has_duplicates or len(new) != len(eid) or not np.isin(eid, new.index.to_numpy()).all():
+        raise ValueError("shuffled_t must hold exactly the dataset's event ids, once each")
+    new_t = new.reindex(eid).to_numpy(dtype=np.int64)
+    order = np.lexsort((eid, new_t))  # by t, then event_id
+    out_df = pd.DataFrame({"u": df["u"].to_numpy()[order], "i": df["i"].to_numpy()[order], "ts": new_t[order],
+                           "label": df["label"].to_numpy()[order], "idx": np.arange(1, len(df) + 1, dtype=np.int64)})
+    out_edge = np.concatenate([edge[:1], edge[1:][order]], axis=0)
+    out.mkdir(parents=True, exist_ok=True)
+    files = {"csv": f"ml_{out_name}.csv", "edge_feat": f"ml_{out_name}.npy", "node_feat": f"ml_{out_name}_node.npy",
+             "idmap": f"ml_{out_name}_idmap.npz"}
+    out_df.to_csv(out / files["csv"])
+    np.save(out / files["edge_feat"], out_edge)
+    shutil.copyfile(data_dir / f"ml_{name}_node.npy", out / files["node_feat"])
+    np.savez(out / files["idmap"], work_id=work_id, event_id=eid[order])
+    meta_path = data_dir / f"ml_{name}_meta.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
+    old_t = df["ts"].to_numpy(dtype=np.int64)
+    meta.update({"name": out_name, "source_name": name, "n_events": int(len(out_df)),
+                 "n_moved": int((new_t != old_t).sum()),
+                 "t_min": int(new_t.min()) if len(new_t) else None, "t_max": int(new_t.max()) if len(new_t) else None,
+                 "files": files})
+    (out / f"ml_{out_name}_meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    return meta
+
+
 def load_idmap(out_dir, name: str) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Return ``(nodes, events)``: ``nodes`` has ``node_idx, work_id``; ``events`` has ``idx, event_id``."""
     with np.load(Path(out_dir) / f"ml_{name}_idmap.npz", allow_pickle=False) as z:
