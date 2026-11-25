@@ -630,3 +630,91 @@ def test_run_pipeline_passes_context_rows_to_the_curvature_stage(fx):
     assert got.loc[eid] == plain.loc[eid] - 3
     assert len(got) == len(ev)                                 # the context rows are not scored
     assert not set(ctx["event_id"]) & set(res.scores["event_id"])
+
+
+# ---------------------------------------------------------------- S4.3 Task 6: shuffle gate with drift, top-20 under G13
+
+def _shuffled_pair(fx):
+    base = run(fx)
+    ev = shuffle_test_timestamps(fx["events"], fx["meta"]["t_min"] - 1, seed=1)
+    shuf = run_pipeline(ev, fx["works"], embeddings=fx["embeddings"], event_labels=fx["event_labels"],
+                        cutoff=fx["meta"]["t_min"] - 1, variant="full", seed=0, cfg=cfg_small(), orc_fn=FakeORC())
+    return base, shuf
+
+
+def _with_auroc(res, value):
+    import copy as _copy
+
+    out = _copy.copy(res)
+    out.metrics = _copy.deepcopy(res.metrics)
+    out.metrics["test"]["auroc"] = value
+    return out
+
+
+def test_gate_shuffle_tgn_follows_gate_shuffle_and_the_drift_rule(fx):
+    from citecurv.pipeline import gate_shuffle_tgn
+
+    base, shuf = _shuffled_pair(fx)
+    zero = {"pre_max_abs_diff_p_link": 0.0, "pre_max_abs_diff_neg_p_link": 0.0}
+    chance = _with_auroc(shuf, 0.5)
+    assert gate_shuffle(base, chance)["status"] == "PASS"
+    assert gate_shuffle_tgn(base, chance, zero, drift_tol=1e-6)["status"] == "PASS"
+    drift = {"pre_max_abs_diff_p_link": 1e-3, "pre_max_abs_diff_neg_p_link": 0.0}
+    g = gate_shuffle_tgn(base, chance, drift, drift_tol=1e-6)
+    assert g["status"] == "FAIL" and g["value"]["drift_ok"] is False
+    same = _with_auroc(shuf, base.metrics["test"]["auroc"])
+    assert gate_shuffle_tgn(base, same, zero, drift_tol=1e-6)["status"] == "FAIL"
+
+
+def test_gate_shuffle_tgn_matched_rows_match_a_hand_computation(fx):
+    from citecurv.eval.metrics import ranking_metrics
+    from citecurv.pipeline import gate_shuffle_tgn
+
+    base, shuf = _shuffled_pair(fx)
+    zero = {"pre_max_abs_diff_p_link": 0.0, "pre_max_abs_diff_neg_p_link": 0.0}
+    g = gate_shuffle_tgn(base, shuf, zero, drift_tol=1e-6, event_labels=fx["event_labels"])
+    lab = fx["event_labels"].set_index("event_id")["label"]
+
+    def scored(res):
+        s = res.scores
+        keep = (res.split.to_numpy() == "test") & ~s["cold_start"].to_numpy()
+        return s.loc[keep].set_index("event_id")
+
+    a, b = scored(base), scored(shuf)
+    ids = a.index.intersection(b.index)
+    y = lab.reindex(ids).fillna(0).to_numpy()
+    want = ranking_metrics(a.loc[ids, "total"].to_numpy(), y)["auroc"]
+    got = g["value"]["matched"]["base"]["total"]["auroc"]
+    assert g["value"]["matched"]["n_rows"] == len(ids)
+    assert got == pytest.approx(want)
+    assert set(g["value"]["matched"]["shuffled"]) >= {"total", "s_embed"}
+
+
+def test_top_breakdown_accepts_g13_unknown_rows(fx):
+    import copy as _copy
+
+    res = run(fx, cfg=cfg_small())
+    s = res.scores.copy()
+    keep = ~s["cold_start"].to_numpy() & (res.split.to_numpy() == "test")
+    top = s.loc[keep].iloc[np.argsort(-s.loc[keep, "total"].to_numpy(), kind="stable")[:3]].index
+    for c in res.metrics["enabled_components"]:
+        s.loc[top, f"z_{c}"] = s.loc[top, f"z_{c}"].fillna(0.5)
+    victim = top[0]
+    s.loc[victim, "z_s_geom"] = np.nan
+    curv = res.curvature.copy()
+    eid = s.at[victim, "event_id"]
+    out = _copy.copy(res)
+    out.scores = s
+    curv.loc[curv["event_id"] == eid, "ref_known"] = False
+    out.curvature = curv
+    assert gate_top_breakdown(out, k=3)["status"] == "PASS"
+    curv2 = curv.copy()
+    curv2.loc[curv2["event_id"] == eid, "ref_known"] = True
+    out.curvature = curv2
+    assert gate_top_breakdown(out, k=3)["status"] == "FAIL"
+
+
+def test_top_breakdown_without_curvature(fx):
+    res = run(fx, variant="no_curvature")
+    assert res.curvature is None
+    assert gate_top_breakdown(res, k=3)["status"] in ("PASS", "FAIL")

@@ -1214,6 +1214,49 @@ def gate_shuffle(full: RunResult, shuffled: RunResult) -> dict:
                 "cold-start statistics unchanged")
 
 
+def gate_shuffle_tgn(base: RunResult, shuffled: RunResult, merge_report: dict, *, drift_tol: float,
+                     event_labels=None) -> dict:
+    """S4.3 shuffle check with the TGN re-scored on the shuffled stream: PASS when gate_shuffle passes (fitted
+    objects identical, AUROC closer to 0.5, each run on its own scored test rows) and the pre-cutoff drift of the
+    shuffled TGN scoring (tgn.infer.merge_shuffled_tgn report) is <= drift_tol for p_link and neg_p_link. Both
+    runs must come from one session (one host) so the fitted objects compare exactly. With event_labels, the
+    value also holds readings on the test rows scored (not cold-start) in both runs, matched by event_id: total
+    and per-component AUROC / AP on each side (reported, not gated)."""
+    from citecurv.eval.metrics import ranking_metrics
+
+    g = gate_shuffle(base, shuffled)
+    drift = {k: float(merge_report.get(k, float("nan"))) for k in ("pre_max_abs_diff_p_link",
+                                                                     "pre_max_abs_diff_neg_p_link")}
+    drift_ok = all(np.isfinite(v) and v <= float(drift_tol) for v in drift.values())
+    value = {**g["value"], **drift, "drift_tol": float(drift_tol), "drift_ok": bool(drift_ok),
+             "gate_shuffle": g["status"]}
+    if event_labels is not None:
+        lab = event_labels.set_index(event_labels["event_id"].to_numpy(dtype=np.int64))["label"]
+
+        def scored(res):
+            s = res.scores
+            keep = (res.split.to_numpy() == "test") & ~s["cold_start"].to_numpy(dtype=bool)
+            return s.loc[keep].set_index(s.loc[keep, "event_id"].to_numpy(dtype=np.int64))
+
+        a, b = scored(base), scored(shuffled)
+        ids = a.index.intersection(b.index)
+        y = lab.reindex(ids).fillna(0).to_numpy()
+        comps = sorted(set(base.metrics.get("enabled_components", [])) & set(shuffled.metrics.get("enabled_components",
+                                                                                                    [])))
+
+        def readings(frame):
+            out = {"total": ranking_metrics(frame.loc[ids, "total"].to_numpy(dtype=float), y)}
+            for c in comps:
+                z = frame.loc[ids, f"z_{c}"].to_numpy(dtype=float)
+                out[c] = ranking_metrics(np.where(np.isnan(z), 0.0, z), y)
+            return out
+
+        value["matched"] = {"n_rows": int(len(ids)), "n_pos": int(y.sum()), "base": readings(a),
+                            "shuffled": readings(b)}
+    return gate(bool(g["status"] == "PASS" and drift_ok), value,
+                "gate_shuffle passes and the shuffled TGN scoring reproduces pre-cutoff rows within drift_tol")
+
+
 def gate_reproducibility(path_a, path_b) -> dict:
     """PASS when two scores.parquet files are byte-identical (NFR4 hash compare)."""
     a, b = scores_sha256(path_a), scores_sha256(path_b)
@@ -1294,7 +1337,9 @@ def gate_fairness(result: RunResult, works, *, flag_share=0.01, max_share=0.5, p
 
 def gate_top_breakdown(result: RunResult, k=20, part="test") -> dict:
     """S3.4d: PASS when each of the top-k scored events has a finite z for every enabled component, so its
-    named breakdown is complete (no NaN or degenerate part)."""
+    named breakdown is complete (no NaN or degenerate part). Under G13 a NaN s_geom / s_curvdyn on a row whose
+    cited work has no known reference list (ref_known false in the curvature frame) is complete by rule: the
+    curvature is unknown there by design. A result without a curvature frame (no_curvature) has no such rows."""
     s = result.scores
     keep = ~s["cold_start"].to_numpy()
     if part != "all":
@@ -1302,6 +1347,13 @@ def gate_top_breakdown(result: RunResult, k=20, part="test") -> dict:
     sub = s.loc[keep]
     top = sub.iloc[np.argsort(-sub["total"].to_numpy(), kind="stable")[:k]]
     enabled = result.metrics["enabled_components"]
-    complete = np.isfinite(top[[f"z_{c}" for c in enabled]].to_numpy()).all(axis=1)
+    finite = np.isfinite(top[[f"z_{c}" for c in enabled]].to_numpy(dtype=float))
+    curv = result.curvature
+    if curv is not None and "ref_known" in curv.columns:
+        unknown = ~top["event_id"].map(curv.set_index("event_id")["ref_known"]).fillna(True).to_numpy(dtype=bool)
+        for j, c in enumerate(enabled):
+            if c in ("s_geom", "s_curvdyn"):
+                finite[:, j] |= unknown
+    complete = finite.all(axis=1)
     return gate(bool(complete.all()), {"k": int(len(top)), "n_complete": int(complete.sum()), "enabled": enabled},
                 f"top-{k} {part} events have a finite z for every enabled component")
