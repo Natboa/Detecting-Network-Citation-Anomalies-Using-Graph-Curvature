@@ -74,7 +74,7 @@ VARIANTS = {
 }
 ABLATION_VARIANTS = ("full", "no_curvature", "forman_only", "ollivier_only", "no_temporal")
 EXTRA_CELLS = ("full_learned",)
-KINDS = ("model", "baseline", "control", "sanity")
+KINDS = ("model", "baseline", "control", "sanity", "report")  # "report": derived records (eval.report_s43)
 
 
 # ----------------------------------------------------------------- run artifacts
@@ -426,11 +426,14 @@ def tables(source, *, control_method="dst_age") -> dict:
     gates PASS/FAIL), extra (groups in EXTRA_GROUPS, e.g. the single TGN run). Paired deltas match runs by
     seed. Hidden helper columns starting with "_" hold unformatted means.
     """
-    records = load_records(source)
+    all_records = load_records(source)
+    reports = [r for r in all_records if r.get("kind") == "report"]
+    records = [r for r in all_records if r.get("kind") != "report"]
     runs = collect_runs(records)
     out = {"runs": runs}
     if runs.empty:
         return out
+    intervals = _report_rows(reports, "interval")
     mat = runs[~runs["group"].isin(EXTRA_GROUPS) & (runs["kind"] != "sanity")]
     keys = sorted(set(zip(mat["group"], mat["level"])), key=lambda k: _key_rank(*k))
 
@@ -450,6 +453,7 @@ def tables(source, *, control_method="dst_age") -> dict:
 
         for m in [v for v in VARIANTS if v in set(d["method"])]:
             row = _summary_rows(d, [m], key)[0]
+            row["seed varies"] = SEED_VARIES.get(m, "")
             for col, label in (("ap", "ΔAP vs full"), ("auroc", "ΔAUROC vs full"), ("p_at_100", "ΔP@100 vs full")):
                 if m == "full" or col not in d or "full" not in set(d["method"]):
                     row[label] = "" if m == "full" else "n/a"
@@ -471,12 +475,15 @@ def tables(source, *, control_method="dst_age") -> dict:
                 spread = np.nanmax([f_sd, c_sd]) if n > 1 else float("nan")
                 same_sign = n > 1 and (np.all(diffs > 0) or np.all(diffs < 0))
                 outside = bool(same_sign and abs(mean) > spread)
+                iv = [r for r in intervals if r.get("comparison") == ["full", "no_curvature"] and r.get("seed") == -1
+                      and r.get("view") == f"scored:{col}" and (r.get("tags") or {}).get("level", "") == level]
                 delta.append({**key, "metric": label, "full": _fmt(f_mean, f_sd, n),
                               "no_curvature": _fmt(c_mean, c_sd, n), "delta (full - no_curv)": _fmt(mean, sd, n),
                               "per-seed deltas": ", ".join(f"s{s}: {x:+.4f}" for s, x in zip(seeds, diffs)),
                               "n_seeds": n, "chance level": chance[label],
                               "verdict": ("outside seed noise" if outside else "within seed noise") if n > 1
                               else "one seed: no noise estimate",
+                              "interval verdict": _interval_verdict(iv[0]) if iv else "no interval",
                               "_delta_mean": mean, "_delta_sd": sd})
 
         if "full" in set(d["method"]):
@@ -575,7 +582,76 @@ def tables(source, *, control_method="dst_age") -> dict:
                 row[label] = _fmt(mean, sd, n)
         rows.append(row)
     out["extra"] = pd.DataFrame(rows)
+
+    # S4.3 derived records (eval.report_s43); every row says whether its inputs changed since it was written
+    out["ablation_intervals"] = pd.DataFrame([
+        {"level": (r.get("tags") or {}).get("level", ""), "comparison": r["method"], "view": r.get("view"),
+         "seed": "pooled" if r.get("seed") == -1 else r.get("seed"), "delta": r.get("delta"), "lo": r.get("lo"),
+         "hi": r.get("hi"), "cluster": _widest_key(r), "excludes 0": bool(r.get("excludes_0")),
+         "n_pos": r.get("n_pos"), "stale": _stale(r)} for r in intervals],
+        columns=["level", "comparison", "view", "seed", "delta", "lo", "hi", "cluster", "excludes 0", "n_pos",
+                 "stale"])
+    out["ablation_views"] = pd.DataFrame([
+        {"level": (r.get("tags") or {}).get("level", ""), "mask": r.get("mask"), "method": r["method"],
+         "seed": r["seed"], "AP": (r.get("test") or {}).get("ap"), "AUROC": (r.get("test") or {}).get("auroc"),
+         "n_dropped": r.get("n_dropped"), "n_pos_dropped": r.get("n_pos_dropped"), "note": r.get("note"),
+         "stale": _stale(r)} for r in _report_rows(reports, "masked_view")])
+    out["orc_coverage"] = pd.DataFrame([
+        {"level": (r.get("tags") or {}).get("level", ""), "method": r["method"], "seed": r["seed"],
+         **{k: r.get(k) for k in ("n_escalated_test", "n_pos_with_orc", "n_pos_with_orc_via_src",
+                                  "n_pos_with_orc_via_dst", "lossy_share", "src_cited_share", "n_errors")},
+         "stale": _stale(r)} for r in _report_rows(reports, "orc_coverage")])
+    out["shuffle_components"] = pd.DataFrame([
+        {"seed": r["seed"], "component": c, "AUROC base": (v.get("base") or {}).get("auroc"),
+         "AUROC shuffled": (v.get("shuffled") or {}).get("auroc"), "AP base": (v.get("base") or {}).get("ap"),
+         "AP shuffled": (v.get("shuffled") or {}).get("ap"), "stale": _stale(r)}
+        for r in _report_rows(reports, "shuffle_components") for c, v in (r.get("components") or {}).items()])
+    out["controls"] = pd.DataFrame([
+        {"group": _group(r), "level": (r.get("tags") or {}).get("level", ""), "control": r["method"],
+         "seed": r["seed"], "direction": r.get("direction"), "AP": (r.get("test") or {}).get("ap"),
+         "AUROC": (r.get("test") or {}).get("auroc"),
+         "AP known refs": ((r.get("on_known") or {}).get("control") or {}).get("ap"),
+         "AP full known refs": ((r.get("on_known") or {}).get("full") or {}).get("ap"),
+         "AP cold": ((r.get("on_cold") or {}).get("control") or {}).get("ap"),
+         "AP full cold (total_cold)": ((r.get("on_cold") or {}).get("full") or {}).get("ap")}
+        for r in records if r.get("kind") == "control" and "direction" in r])
     return out
+
+
+SEED_VARIES = {
+    "full": "TGN checkpoint, s_curvdyn subsample", "no_curvature": "TGN checkpoint",
+    "forman_only": "TGN checkpoint, s_curvdyn subsample", "full_learned": "TGN checkpoint, s_curvdyn subsample",
+    "ollivier_only": "TGN checkpoint, random ORC set, s_curvdyn subsample",
+    "no_temporal": "s_curvdyn subsample only",
+}
+
+
+def _report_rows(reports, group):
+    return [r for r in reports if (r.get("tags") or {}).get("group") == group]
+
+
+def _widest_key(r) -> str:
+    per = r.get("per_key") or {}
+    return max(per, key=lambda k: per[k].get("hi", 0) - per[k].get("lo", 0)) if per else ""
+
+
+def _interval_verdict(r) -> str:
+    word = "interval excludes 0" if r.get("excludes_0") else "interval spans 0"
+    lo, hi = r.get("lo"), r.get("hi")
+    if lo is None or hi is None:
+        return word
+    return f"{word} [{lo:+.4f}, {hi:+.4f}]"
+
+
+def _stale(r) -> bool:
+    """True when a file a derived record read has changed since (missing files are not judged)."""
+    import hashlib
+
+    for path, digest in (r.get("inputs") or {}).items():
+        p = Path(path)
+        if p.is_file() and hashlib.sha256(p.read_bytes()).hexdigest() != digest:
+            return True
+    return False
 
 
 def _md_table(df: pd.DataFrame) -> str:
