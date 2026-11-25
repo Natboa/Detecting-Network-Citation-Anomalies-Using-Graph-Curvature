@@ -561,11 +561,13 @@ def _resolve_run(events, event_labels, cutoff, variant, seed, cfg):
     return rcfg, ev, y, labels_df, int(c_val), c_rule, chash, dhash
 
 
-def run_identity(data: dict, variant: str, seed: int, cfg=None, tags=None) -> dict:
+def run_identity(data: dict, variant: str, seed: int, cfg=None, tags=None, context=None) -> dict:
     """What a finished run folder must match to be reused on resume: config_hash, data_hash (both as
-    run_pipeline computes them) and the commit tag. data: run_pipeline inputs (TGN outputs not needed)."""
+    run_pipeline computes them), the commit tag and the context rows' hash (data_hash does not cover them).
+    data: run_pipeline inputs (TGN outputs not needed)."""
     *_, chash, dhash = _resolve_run(data["events"], data.get("event_labels"), data.get("cutoff"), variant, seed, cfg)
-    return {"config_hash": chash, "data_hash": dhash, "commit": (tags or {}).get("commit")}
+    return {"config_hash": chash, "data_hash": dhash, "commit": (tags or {}).get("commit"),
+            "context_hash": context_hash(context)}
 
 
 RUN_FILES = ("config.json", "scores.parquet", "weights.json", "zstats.json", "thresholds.json", "escalated.npy")
@@ -726,7 +728,7 @@ def run_pipeline(events, works, *, authorships=None, embeddings=None, event_labe
     ks = tuple(rcfg["eval"]["top_k"])
     metrics = {
         "kind": "model", "method": variant, "variant": variant, "seed": int(seed), "config_hash": chash,
-        "data_hash": dhash, "tags": dict(tags or {}),
+        "data_hash": dhash, "context_hash": context_hash(context), "tags": dict(tags or {}),
         "cutoff_t": int(c_val), "cutoff_date": rcfg["split"]["cutoff_date_resolved"], "cutoff_rule": c_rule,
         "split_counts": split_counts(ev, split, labels_df if have_labels else None),
         "n_cold_start": int(cold.sum()), "cold_start_scoring": cold_info,
@@ -1097,7 +1099,7 @@ def precompute_matrix_orc(events, cutoff, rcfg, seeds, *, out_path, context=None
     store = None
     n_chunks = n_done = 0
     restarted = False
-    t_sub, t_orc = [], []
+    t_sub, t_orc, p95_edges, max_edges = [], [], [], []
     try:
         if len(todo):
             hb.update(phase="store", time=time.time())
@@ -1142,6 +1144,8 @@ def precompute_matrix_orc(events, cutoff, rcfg, seeds, *, out_path, context=None
             n_chunks += 1
             t_sub.append(est["subgraph_s_per_event"])
             t_orc.append(est["orc_s_per_event"])
+            p95_edges.append(est["p95_subgraph_edges"])
+            max_edges.append(est["max_subgraph_edges"])
             write_checkpoint()
             todo = pending()
         if not out_path.exists() or (n_chunks == 0 and dirty):
@@ -1165,6 +1169,11 @@ def precompute_matrix_orc(events, cutoff, rcfg, seeds, *, out_path, context=None
             "n_errors": int(errs.sum()), "n_chunks_run": int(n_chunks),
             "seconds": time.perf_counter() - t_start, "subgraph_s_per_event": mean(t_sub),
             "orc_s_per_event": mean(t_orc), "split_counts": counts, "n_screen_flagged": sstats["n_screen_flagged"],
+            "n_screen_unknown": sstats["n_screen_unknown"],
+            "screen_flagged_by_split": {part: int((curv["escalated"].to_numpy() & (split == part)).sum())
+                                        for part in ("train", "val", "test")},
+            "p95_subgraph_edges": max([v for v in p95_edges if np.isfinite(v)], default=None),
+            "max_subgraph_edges": max(max_edges, default=None),
             "n_eligible": int(curv["ref_known"].sum()) if uwr else int(len(curv)), "seeds": seed_union}
 
 

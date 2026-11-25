@@ -478,3 +478,15 @@ def test_screen_report_by_group_and_year():
     assert list(yr.index) == [1970] and yr.loc[1970, "n"] == 100
     allrep = screen_report(curv)
     assert list(allrep.index) == ["all"] and allrep.loc["all", "mean"] == pytest.approx(49.5)
+
+
+def test_screen_can_return_its_degrees():
+    from citecurv.data.synthetic import load_fixture
+
+    ev = load_fixture()["events"]
+    plain = forman_screen(ev)
+    deg = forman_screen(ev, return_degrees=True)
+    assert list(plain.columns) == CURVATURE_COLUMNS  # default output unchanged
+    np.testing.assert_array_equal(deg["forman"].to_numpy(), 2.0 - deg["in_deg_src"] - deg["out_deg_dst"])
+    np.testing.assert_array_equal(deg["ref_known"].to_numpy(), deg["out_deg_dst"].to_numpy() > 0)
+

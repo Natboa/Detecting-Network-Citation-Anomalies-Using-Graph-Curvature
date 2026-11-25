@@ -193,10 +193,11 @@ def run_matrix(variants, seeds, data, out_dir, *, cfg=None, orc_fn=None, tags=No
                 continue
             if identity_data is None and d is None:
                 d = dict(data(seed) if callable(data) else data)
-            ident = run_identity(identity_data if identity_data is not None else d, v, seed, cfg, tags)
+            ident = run_identity(identity_data if identity_data is not None else d, v, seed, cfg, tags,
+                                 context=pipeline_kwargs.get("context"))
             stored = {"config_hash": m.get("config_hash"), "data_hash": m.get("data_hash"),
-                      "commit": (m.get("tags") or {}).get("commit")}
-            for k in ("config_hash", "data_hash", "commit"):
+                      "commit": (m.get("tags") or {}).get("commit"), "context_hash": m.get("context_hash", "none")}
+            for k in ("config_hash", "data_hash", "commit", "context_hash"):
                 if stored[k] != ident[k]:
                     raise ValueError(f"resume: {run_dir_name(v, seed)} was computed with another {k.split('_')[0]} "
                                      f"({stored[k]!r}, now {ident[k]!r})")

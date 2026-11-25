@@ -227,3 +227,19 @@ def test_memo_from_cache_can_include_attempted_nan_rows():
     assert math.isnan(memo[_memo_key("b", "y", 2, 5, 1)])
     plain = cache.drop(columns="orc_attempted")
     assert len(orc_memo_from_cache(plain, 1, include_attempted=True)) == 1
+
+
+def test_resume_refuses_other_context_rows(fx, tmp_path):
+    ev = fx["events"]
+    ctx = pd.DataFrame({"event_id": np.arange(2, dtype=np.int64) + int(ev["event_id"].max()) + 100,
+                        "src_id": list(ev["dst_id"].iloc[:2]), "dst_id": ["ctx_a", "ctx_b"],
+                        "t": np.array([int(ev["t"].min())] * 2, dtype=np.int64)})
+    A.run_matrix(["no_curvature"], [0], _data(fx), tmp_path, cfg=cfg_small(), orc_fn=FakeORC(), context=ctx)
+    m = json.loads((tmp_path / "runs" / "no_curvature_0" / "metrics.json").read_text())
+    assert m["context_hash"] != "none"
+    A.run_matrix(["no_curvature"], [0], _data(fx), tmp_path, cfg=cfg_small(), orc_fn=FakeORC(), context=ctx,
+                 resume=True)
+    with pytest.raises(ValueError, match="context"):
+        A.run_matrix(["no_curvature"], [0], _data(fx), tmp_path, cfg=cfg_small(), orc_fn=FakeORC(),
+                     context=ctx.iloc[:1], resume=True)
+

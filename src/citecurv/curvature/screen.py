@@ -91,7 +91,7 @@ def _with_context(ev, context):
     return rows[EVENT_COLUMNS], rows["_scored"].to_numpy(dtype=bool)
 
 
-def forman_screen(events, *, count_duplicates=False, unknown_without_refs=False, context=None) -> pd.DataFrame:
+def forman_screen(events, *, count_duplicates=False, unknown_without_refs=False, context=None, return_degrees=False) -> pd.DataFrame:
     """Unweighted directed Forman curvature of every event at its own time.
 
     events: DataFrame with event_id (unique), src_id, dst_id, t (int days).
@@ -117,6 +117,8 @@ def forman_screen(events, *, count_duplicates=False, unknown_without_refs=False,
     n = len(ev)
     forman = np.empty(n, dtype=np.float64)
     ref_known = np.zeros(n, dtype=bool)
+    in_deg = np.zeros(n, dtype=np.float64)
+    out_deg = np.zeros(n, dtype=np.float64)
     if n:
         rows, scored = _with_context(ev, context)
         m = len(rows)
@@ -156,6 +158,8 @@ def forman_screen(events, *, count_duplicates=False, unknown_without_refs=False,
             out_dst = out_dst - own
         forman[:] = 2.0 - in_src - out_dst
         ref_known[:] = out_dst > 0  # the cited work has a known reference at t (G13), after the self-loop rule
+        in_deg[:] = in_src
+        out_deg[:] = out_dst
         if unknown_without_refs:
             forman[out_dst == 0] = np.nan
 
@@ -166,6 +170,10 @@ def forman_screen(events, *, count_duplicates=False, unknown_without_refs=False,
     out["radius"] = np.nan
     out["computed_at_stage"] = "screen"
     out["ref_known"] = ref_known
+    if return_degrees:  # the two counts behind F, for the G7 counting controls (not cache columns)
+        out["in_deg_src"] = in_deg
+        out["out_deg_dst"] = out_deg
+        return out[CURVATURE_COLUMNS + ["in_deg_src", "out_deg_dst"]]
     return out[CURVATURE_COLUMNS]
 
 

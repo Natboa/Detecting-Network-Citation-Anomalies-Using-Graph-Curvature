@@ -466,3 +466,12 @@ def test_killed_marks_are_saved_before_the_store_is_built(fx, tmp_path, monkeypa
     assert got.loc[victim, "orc_error"] == "killed: timeout"
     assert victim in json.loads(hb.read_text())["in_flight"] or json.loads(hb.read_text())["phase"] != "orc"
 
+
+def test_precompute_reports_the_c1_counts(fx, tmp_path):
+    ev, rcfg = fx["events"], rc()
+    res = precompute_matrix_orc(ev, cut(fx), rcfg, [], out_path=tmp_path / "o.parquet", orc_fn=Recorder())
+    screen = forman_screen(ev, unknown_without_refs=True)
+    assert res["n_screen_unknown"] == int(screen["forman"].isna().sum())
+    assert sum(res["screen_flagged_by_split"].values()) == res["n_screen_flagged"]
+    assert res["max_subgraph_edges"] >= res["p95_subgraph_edges"] > 0
+
