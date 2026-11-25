@@ -23,7 +23,7 @@ created by whoever merges the work (`git tag v0.2.0 && git push origin v0.2.0`).
 | 3d | `27_cited_joint.ipynb` | S4.0 full run (2026-11-17): title, abstract, date, reference count and reference ids of cited works outside the pulled set in one pull (`cited_joint.parquet`), one call per 100 ids instead of the two of `25` and `26`; stops when the daily allowance is spent and continues on a rerun after the reset | CPU (standard for the fetching days, High-RAM for the run that merges) | 3.12 or newer | written, not run yet; its trial cell must pass before the pull |
 | 4 | `30_curvature.ipynb` | S2.2 Forman screen, S2.3 threshold/radius/budget grid and ORC escalation; reads the cited works' reference lists (`cited_joint.parquet`, or `cited_refs.parquet`) as context rows | CPU, high-RAM | 3.12 required (opt-in 3.13 path) | edited 2026-11-18 for the context rows and the unknown rule (G13), not run since |
 | 5 | `40_tgn.ipynb` | S1.7 pilot training, S4.2 main runs | GPU (T4 for the pilot) | 3.12 (warns otherwise) | ready |
-| 6 | `50_eval.ipynb` | S3.4, S4.3 ablations, S4.4 baselines, S4.6 tables | GPU | 3.12 | not written yet |
+| 6 | `50_eval.ipynb` | S4.3 full-run matrix, shuffle check, S3.4 gates on `full_0`, S4.6 tables | CPU High-RAM (C5b: GPU) | 3.12 (C5b: the image of seed 0's stored scores) | written 2026-11-25, section 11 |
 
 S1.1-live (the first real pull) and S1.2 run from `10_data` or locally; see the checklist in
 section 9. The directed ORC values of S1.5 come from Block A of `00_smoke` and from
@@ -350,3 +350,31 @@ OpenAlex. (2026b, October 14). *Page through results*. https://help.openalex.org
 
 OpenAlex. (2026c, October 23). *Example costs*. https://help.openalex.org/access/example-costs/
 (source: https://github.com/ourresearch/openalex-help, `content/access/example-costs.md`)
+
+## 11. Full-run matrix (S4.3, `50_eval`)
+
+Plan: `docs/superpowers/plans/2026-11-25-s43-ablation-matrix.md`. One step per session, each on Maor's word after the
+previous step's report; every job cell has `MAX_HOURS`, flushes Drive and releases the runtime.
+
+- **C0** the suite on runtime 2026.07 (`pytest -q -rA`): 0 failed, or only `test_training_steps_match_upstream[1]` as
+  at c57b6df; `test_batched_escalate_equals_per_event_with_the_library` and
+  `test_orc_worker_equals_in_process_with_the_library` must be among the PASSED.
+- **C1** short ORC jobs in the precompute's memory state: rate per row for batch 1, 10, 50 in process and 1, 10 in the
+  ORC worker; screen counts, eligible rows, cold-start positives, the D4 field. Fallbacks to name to Maor when a
+  projection exceeds 20 hours: one random set for all seeds; the closed form for rows whose citing work is uncited at
+  t (checked against the library); building the tier <= 2 subgraph directly.
+- **C2** the screen set's ORC values (`eval/orc_matrix.parquet`, sidecar `.json`), resumable; the job runs as
+  `python -m citecurv.eval.orc_job` in its own process group and is killed with `os.killpg` when its heartbeat (local
+  disk) goes stale; it is restarted at most once before a report.
+- **C3** every cell but `ollivier_only` for seeds 0 to 4 with `require_orc_memo=True` (no EventStore in any cell), plus
+  the `no_temporal_keep_temp` group; `full_0`'s gates in that session; reproducibility of `forman_only` seed 0 in a
+  fresh session (group `repro`), host fingerprints compared.
+- **C4** per seed: the job adds that seed's random set (only new rows are computed), then its `ollivier_only` cell.
+- **C5** shuffle check. Expected readings, written before the step runs: `s_temp` toward chance; the Forman part of
+  `s_geom` close to unchanged by construction (the cited works' reference lists are context rows dated at their own
+  publication, not shuffled) except for cited works published in the test period; the ORC part partly toward chance
+  (the citing work's own references are scattered); `s_embed` and `s_curvdyn` partly kept (the TGN's node features are
+  timeless text). `drift_tol` 1e-12 when C5b ran on the stack of the stored seed-0 scores (python 3.13.16, torch
+  2.14.1+cu130); otherwise re-score the original dataset in the same GPU session and use 10 x the measured maximum.
+- **C6** `python -m citecurv.eval.report_s43 <spec.json>` (intervals, masked views, controls, ORC coverage), then the
+  tables with the banner of the provisional settings, G11 and G3.
