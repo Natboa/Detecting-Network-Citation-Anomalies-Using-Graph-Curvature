@@ -129,8 +129,34 @@ def write_run(run_dir, metrics: dict, config: dict | None = None) -> Path:
 # ----------------------------------------------------------------- the matrix
 
 
+def _finished(run_dir: Path):
+    """metrics.json of a complete run folder, else None: every file listed under metrics["files"] must exist
+    with the recorded size and sha256 (metrics.json is written last)."""
+    import hashlib
+
+    mpath = run_dir / "metrics.json"
+    if not mpath.is_file():
+        return None
+    try:
+        m = json.loads(mpath.read_text())
+    except ValueError:
+        return None
+    files = m.get("files")
+    if not files:
+        return m if m.get("kind") != "model" else None
+    for name, rec in files.items():
+        p = run_dir / name
+        if not p.is_file():
+            return None
+        data = p.read_bytes()
+        if len(data) != rec.get("bytes") or hashlib.sha256(data).hexdigest() != rec.get("sha256"):
+            return None
+    return m
+
+
 def run_matrix(variants, seeds, data, out_dir, *, cfg=None, orc_fn=None, tags=None, share_orc=True,
-               orc_memo=None, callback=None, memos=None, resume=False, **pipeline_kwargs) -> list[dict]:
+               orc_memo=None, callback=None, memos=None, resume=False, require_orc_memo=False, identity_data=None,
+               **pipeline_kwargs) -> list[dict]:
     """Run every (variant, seed) cell and write ``out_dir/runs/<variant>_<seed>/``.
 
     data: mapping of run_pipeline inputs (events, works, embeddings, event_labels, cutoff, tgn_scores, ...)
@@ -138,34 +164,64 @@ def run_matrix(variants, seeds, data, out_dir, *, cfg=None, orc_fn=None, tags=No
     share_orc: one ORC memo per seed, shared by the variants of that seed (they see the same stream, so the
     cached ORC values are identical to recomputed ones). orc_memo: one memo used for every seed instead (the
     caller guarantees it belongs to the same stream, e.g. a rerun of one realisation in another setting).
-    callback(result) receives each RunResult (to keep frames a caller needs). memos: optional dict that
-    receives seed -> the ORC memo used for that seed (for follow-up runs on the same stream). resume: skip a
-    cell whose metrics.json already exists (its stored metrics are returned instead; checkpoint-resume on
-    Colab, plan 9.1). Returns the metrics dicts in run order.
+    A per-seed EventStore (events plus pipeline_kwargs["context"]) is prebuilt only when orc_memo is None and
+    require_orc_memo is off; otherwise a cell builds one itself only for ORC misses, or (require_orc_memo)
+    raises pipeline.OrcMemoMiss. callback(result) receives each RunResult (to keep frames a caller needs).
+    memos: optional dict that receives seed -> the ORC memo used for that seed (for follow-up runs on the same
+    stream). resume: skip a cell whose folder is complete (all run files present with the sizes and hashes in
+    its metrics.json) and whose config_hash, data_hash and commit tag equal this call's (pipeline.run_identity);
+    an incomplete folder is rerun, another configuration, data or commit raises. identity_data: the inputs
+    without TGN outputs, used for that check before data(seed) loads anything heavy. Returns the metrics dicts
+    in run order.
     """
-    from citecurv.curvature.timeslice import EventStore
-    from citecurv.pipeline import run_pipeline
+    import pandas as pd
+
+    from citecurv.curvature import timeslice as ts_mod
+    from citecurv.pipeline import run_identity, run_pipeline
 
     unknown = [v for v in variants if v not in VARIANTS]
     if unknown:
         raise ValueError(f"unknown variant(s) {unknown}")
     out = []
     for seed in seeds:
-        todo = [v for v in variants
-                if not (resume and (Path(out_dir) / "runs" / run_dir_name(v, seed) / "metrics.json").is_file())]
-        for v in [v for v in variants if v not in todo]:
-            out.append(json.loads((Path(out_dir) / "runs" / run_dir_name(v, seed) / "metrics.json").read_text()))
+        d = None
+        todo, kept = [], {}
+        for v in variants:
+            m = _finished(Path(out_dir) / "runs" / run_dir_name(v, seed)) if resume else None
+            if m is None:
+                todo.append(v)
+                continue
+            if identity_data is None and d is None:
+                d = dict(data(seed) if callable(data) else data)
+            ident = run_identity(identity_data if identity_data is not None else d, v, seed, cfg, tags)
+            stored = {"config_hash": m.get("config_hash"), "data_hash": m.get("data_hash"),
+                      "commit": (m.get("tags") or {}).get("commit")}
+            for k in ("config_hash", "data_hash", "commit"):
+                if stored[k] != ident[k]:
+                    raise ValueError(f"resume: {run_dir_name(v, seed)} was computed with another {k.split('_')[0]} "
+                                     f"({stored[k]!r}, now {ident[k]!r})")
+            kept[v] = m
         if not todo:
+            out.extend(kept[v] for v in variants)
             continue
-        d = dict(data(seed) if callable(data) else data)
+        if d is None:
+            d = dict(data(seed) if callable(data) else data)
         memo = orc_memo if orc_memo is not None else ({} if share_orc else None)
         if memos is not None and memo is not None:
             memos[seed] = memo
-        store = EventStore(d["events"]) if any(VARIANTS[v].curvature.endswith("orc") for v in todo) else None
-        for v in todo:
+        store = None
+        if orc_memo is None and not require_orc_memo and any(VARIANTS[v].curvature.endswith("orc") for v in todo):
+            ctx = pipeline_kwargs.get("context")
+            cols = ["src_id", "dst_id", "t"]
+            rows = d["events"] if ctx is None else pd.concat([d["events"][cols], ctx[cols]], ignore_index=True)
+            store = ts_mod.EventStore(rows)
+        for v in variants:
+            if v in kept:
+                out.append(kept[v])
+                continue
             res = run_pipeline(**d, variant=v, seed=seed, cfg=cfg, orc_fn=orc_fn,
                                out_dir=Path(out_dir) / "runs" / run_dir_name(v, seed), orc_memo=memo, store=store,
-                               tags=tags, **pipeline_kwargs)
+                               tags=tags, require_orc_memo=require_orc_memo, **pipeline_kwargs)
             out.append(res.metrics)
             if callback is not None:
                 callback(res)

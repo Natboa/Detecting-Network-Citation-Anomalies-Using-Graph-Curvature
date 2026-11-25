@@ -316,19 +316,31 @@ def _memo_key(row_src, row_dst, eid, t, radius):
     return (int(eid), str(row_src), str(row_dst), int(t), int(radius))
 
 
-def curvature_stage(events, split, rcfg, *, seed=0, orc_fn=None, store=None, orc_memo=None, context=None):
+class OrcMemoMiss(ValueError):
+    """A cell run with require_orc_memo=True found escalated rows without an ORC memo value (raised before any
+    EventStore is built)."""
+
+
+def curvature_stage(events, split, rcfg, *, seed=0, orc_fn=None, store=None, orc_memo=None, context=None,
+                    require_orc_memo=False):
     """Curvature cache for the run's variant (None for no_curvature) plus thresholds and stage statistics.
 
     events: canonical events frame; split: array of 'train'/'val'/'test' aligned with it. context: optional
     rows (event_id, src_id, dst_id, t; ids of their own) that take part in the graph and are not scored, e.g.
     the reference lists of the cited works (citecurv.data.cited.reference_events). They enter the screen's
     degrees and, when no store is passed, the EventStore behind the ORC subgraphs; a store passed in must
-    already hold them. Thresholds are fitted on event rows only. Returns
+    already hold them. Thresholds are fitted on event rows only.
+
+    ORC values come from orc_memo first (a key whose value is NaN is a hit: an attempted row, written as NaN).
+    An EventStore is built, and escalate called, only for escalated non-self-loop rows without a memo key;
+    with require_orc_memo=True such a miss raises OrcMemoMiss before anything is built. The frame returned
+    holds exactly CURVATURE_COLUMNS, whether values were computed here or read from the memo. Returns
     (curvature frame | None, thresholds | None, stats dict).
     """
+    from citecurv.curvature import screen as screen_mod
+    from citecurv.curvature import timeslice as ts_mod
     from citecurv.curvature.orc import escalate
-    from citecurv.curvature.screen import apply_screen, forman_screen, screen_thresholds
-    from citecurv.curvature.timeslice import EventStore
+    from citecurv.curvature.screen import CURVATURE_COLUMNS, forman_screen, screen_thresholds
     from citecurv.scoring.components import matched_random_escalation
 
     mode = rcfg["variant_spec"]["curvature"]
@@ -350,7 +362,7 @@ def curvature_stage(events, split, rcfg, *, seed=0, orc_fn=None, store=None, orc
             f"context rows (citecurv.data.cited.reference_events); got {n_context} context rows")
     th = screen_thresholds(curv, train, cc["screen_percentile_low"], cc["screen_percentile_high"],
                            inclusive=cc["screen_inclusive_ties"])
-    curv = apply_screen(curv, th)
+    curv = screen_mod.apply_screen(curv, th)
     n_screen = int(curv["escalated"].sum())
     stats = {"mode": mode, "n_events": int(len(curv)), "n_screen_flagged": n_screen,
              "screen_rate": n_screen / max(len(curv), 1), "n_screen_unknown": n_unknown,
@@ -379,34 +391,47 @@ def curvature_stage(events, split, rcfg, *, seed=0, orc_fn=None, store=None, orc
             curv["src_id"].to_numpy()[esc], curv["dst_id"].to_numpy()[esc],
             curv["event_id"].to_numpy()[esc], curv["t"].to_numpy()[esc])]
         n_hit = 0
+        is_loop = (curv["src_id"].to_numpy()[esc] == curv["dst_id"].to_numpy()[esc])
+        hit = np.zeros(len(esc), dtype=bool)
         if orc_memo:
             o_col, r_col, s_col = (curv.columns.get_loc(c) for c in ("orc", "radius", "computed_at_stage"))
-            for i, key in zip(esc, keys):
-                if key in orc_memo:  # same output as a fresh computation: value, radius, stage
+            for j, (i, key) in enumerate(zip(esc, keys)):
+                if key in orc_memo:  # same output as a fresh computation: value (NaN for an attempted row), radius
                     curv.iat[i, o_col] = orc_memo[key]
                     curv.iat[i, r_col] = float(radius)
                     curv.iat[i, s_col] = "escalate"
+                    hit[j] = True
                     n_hit += 1
-        if store is None:
-            cols = ["src_id", "dst_id", "t"]
-            store = EventStore(events if not n_context else pd.concat([events[cols], context[cols]],
-                                                                        ignore_index=True))
-        curv, est = escalate(events, curv, store, radius, cc["orc_subgraph_edge_cap"], prune=cc["orc_prune"],
-                             orc_fn=orc_fn, stage="escalate", **cc["orc"])
-        if orc_memo is not None:
-            vals = curv["orc"].to_numpy(dtype=float)[esc]
-            for key, v in zip(keys, vals):
-                if np.isfinite(v):
-                    orc_memo[key] = float(v)
-        stats.update({"n_escalated": int(len(esc)), "n_orc_memo_hits": n_hit,
-                      "n_orc_computed": int(est["n_computed"]),
-                      "orc_s": time.perf_counter() - t1,
-                      "orc_s_per_computed": est["total_s_per_event"],
-                      "mean_subgraph_edges": est["mean_subgraph_edges"],
-                      "n_capped": est["n_capped"], "n_capped_lossy": est["n_capped_lossy"]})
+        miss = esc[~hit & ~is_loop]
+        stats.update({"n_escalated": int(len(esc)), "n_self_loops_escalated": int(is_loop.sum()),
+                      "n_orc_memo_hits": n_hit})
+        if len(miss) and require_orc_memo:
+            first = [keys[j] for j in np.flatnonzero(~hit & ~is_loop)[:5]]
+            raise OrcMemoMiss(f"{len(miss)} escalated row(s) have no ORC memo value (require_orc_memo=True); "
+                              f"first keys {first}")
+        if len(miss):
+            if store is None:
+                cols = ["src_id", "dst_id", "t"]
+                store = ts_mod.EventStore(events if not n_context else pd.concat([events[cols], context[cols]],
+                                                                                  ignore_index=True))
+            curv, est = escalate(events, curv, store, radius, cc["orc_subgraph_edge_cap"], prune=cc["orc_prune"],
+                                 orc_fn=orc_fn, stage="escalate", rows=miss, **cc["orc"])
+            if orc_memo is not None:
+                vals = curv["orc"].to_numpy(dtype=float)[esc]
+                for key, v, was_hit in zip(keys, vals, hit):
+                    if not was_hit and np.isfinite(v):
+                        orc_memo[key] = float(v)
+            stats.update({"n_orc_computed": int(est["n_computed"]),
+                          "orc_s_per_computed": est["total_s_per_event"],
+                          "mean_subgraph_edges": est["mean_subgraph_edges"],
+                          "n_capped": est["n_capped"], "n_capped_lossy": est["n_capped_lossy"]})
+        else:
+            stats.update({"n_orc_computed": 0, "orc_s_per_computed": None, "mean_subgraph_edges": None,
+                          "n_capped": None, "n_capped_lossy": None})
+        stats["orc_s"] = time.perf_counter() - t1
     else:
         stats.update({"n_escalated": 0, "n_orc_memo_hits": 0, "n_orc_computed": 0})
-    return curv, th, stats
+    return curv[list(CURVATURE_COLUMNS)], th, stats
 
 
 # ----------------------------------------------------------------- combiner stage
@@ -489,9 +514,40 @@ def cold_start_scores(comp, split, cold, components, cfg_weights, disabled=(), *
 # ----------------------------------------------------------------- the run
 
 
+def _resolve_run(events, event_labels, cutoff, variant, seed, cfg):
+    """The resolved config, canonical events, labels, split cutoff and the two hashes of one run, exactly as
+    run_pipeline computes them (shared with run_identity, so resume checks compare like with like)."""
+    rcfg = resolve_config(cfg, variant=variant, seed=seed)
+    ev = _canonical_events(events)
+    y = label_vector(ev["event_id"].to_numpy(), event_labels)
+    labels_df = pd.DataFrame({"event_id": ev["event_id"].to_numpy(), "label": y})
+    c_val, c_rule = resolve_cutoff(ev, labels_df if event_labels is not None else None, rcfg, cutoff)
+    rcfg["split"].update({"cutoff_t": int(c_val), "cutoff_rule": c_rule,
+                          "cutoff_date_resolved": (EPOCH + _dt.timedelta(days=int(c_val))).isoformat()})
+    chash = run_config_hash(rcfg)
+    dhash = data_hash(ev, labels_df if event_labels is not None else None)
+    return rcfg, ev, y, labels_df, int(c_val), c_rule, chash, dhash
+
+
+def run_identity(data: dict, variant: str, seed: int, cfg=None, tags=None) -> dict:
+    """What a finished run folder must match to be reused on resume: config_hash, data_hash (both as
+    run_pipeline computes them) and the commit tag. data: run_pipeline inputs (TGN outputs not needed)."""
+    *_, chash, dhash = _resolve_run(data["events"], data.get("event_labels"), data.get("cutoff"), variant, seed, cfg)
+    return {"config_hash": chash, "data_hash": dhash, "commit": (tags or {}).get("commit")}
+
+
+RUN_FILES = ("config.json", "scores.parquet", "weights.json", "zstats.json", "thresholds.json", "escalated.npy")
+
+
+def _file_record(path: Path) -> dict:
+    data = path.read_bytes()
+    return {"bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+
+
 def run_pipeline(events, works, *, authorships=None, embeddings=None, event_labels=None, cutoff=None,
                  variant="full", seed=0, cfg=None, tgn_scores=None, tgn_embeddings=None, orc_fn=None,
-                 out_dir=None, orc_memo=None, store=None, tags=None, context=None) -> RunResult:
+                 out_dir=None, orc_memo=None, store=None, tags=None, context=None,
+                 require_orc_memo=False) -> RunResult:
     """One run of one ablation cell; see the module docstring for the stages and their order.
 
     events: CONTRACTS.md events frame (event_id, src_id, dst_id, t; extra columns ignored). works: work_id +
@@ -515,29 +571,23 @@ def run_pipeline(events, works, *, authorships=None, embeddings=None, event_labe
 
     t_run = time.perf_counter()
     timings = {}
-    rcfg = resolve_config(cfg, variant=variant, seed=seed)
+    rcfg, ev, y, labels_df, c_val, c_rule, chash, dhash = _resolve_run(events, event_labels, cutoff, variant,
+                                                                       seed, cfg)
     spec = rcfg["variant_spec"]
     pipe = rcfg["pipeline"]
-    ev = _canonical_events(events)
-    y = label_vector(ev["event_id"].to_numpy(), event_labels)
-    labels_df = pd.DataFrame({"event_id": ev["event_id"].to_numpy(), "label": y})
     sources = label_sources(ev["event_id"].to_numpy(), event_labels)
 
     # 1. split
-    c_val, c_rule = resolve_cutoff(ev, labels_df if event_labels is not None else None, rcfg, cutoff)
     split = split_events(ev, c_val, val_frac=rcfg["split"]["val_frac"]).to_numpy(dtype=object)
-    rcfg["split"].update({"cutoff_t": int(c_val), "cutoff_rule": c_rule,
-                          "cutoff_date_resolved": (EPOCH + _dt.timedelta(days=int(c_val))).isoformat()})
     train = split == "train"
     if not train.any():
         raise ValueError("the split leaves no training rows")
-    chash = run_config_hash(rcfg)
-    dhash = data_hash(ev, labels_df if event_labels is not None else None)
 
     # 2. curvature
     t0 = time.perf_counter()
     curv, thresholds, curv_stats = curvature_stage(ev, split, rcfg, seed=seed, orc_fn=orc_fn, store=store,
-                                                   orc_memo=orc_memo, context=context)
+                                                   orc_memo=orc_memo, context=context,
+                                                   require_orc_memo=require_orc_memo)
     timings["curvature_s"] = time.perf_counter() - t0
 
     # 3. components
@@ -688,15 +738,24 @@ def run_pipeline(events, works, *, authorships=None, embeddings=None, event_labe
                        weights_source=weights_source, learned=learned, scores=scores, metrics=metrics,
                        stats={"curvature": curv_stats})
     if out_dir is not None:
+        # every other run file first, metrics.json last with their sizes and hashes: a folder whose metrics.json
+        # exists and matches its files is complete (run_matrix resume)
         out = Path(out_dir)
+        out.mkdir(parents=True, exist_ok=True)
         write_scores(scores, out / "scores.parquet", variant, seed, chash)
-        write_run(out, metrics, {**rcfg, "config_hash": chash})
+        write_json(out / "config.json", {**rcfg, "config_hash": chash})
         write_json(out / "weights.json", {"weights": weights, "weights_on_simplex": learned is None,
                                           "weights_source": weights_source, "calibration": calibration,
                                           "learned": metrics["learned"], "enabled": enabled,
                                           "disabled": sorted(disabled)})
         write_json(out / "zstats.json", zs.to_dict())
         write_json(out / "thresholds.json", thresholds)
+        esc_ids = (np.zeros(0, dtype=np.int64) if curv is None
+                   else curv.loc[curv["escalated"].to_numpy(dtype=bool), "event_id"].to_numpy(dtype=np.int64))
+        with open(out / "escalated.npy", "wb") as f:
+            np.save(f, esc_ids)
+        metrics["files"] = {name: _file_record(out / name) for name in RUN_FILES}
+        write_run(out, metrics)
         result.out_dir = out
     return result
 
@@ -766,12 +825,18 @@ def baseline_record(result: RunResult, kind: str, method: str, test: dict, tags=
 # ----------------------------------------------------------------- reuse of a curvature cache
 
 
-def orc_memo_from_cache(curvature, radius) -> dict:
-    """ORC memo from a curvature cache written by the curvature stage (notebooks/30_curvature.ipynb), so a
-    pipeline run reuses expensive ORC values instead of recomputing them. Only rows with a finite orc at the
-    requested radius enter. Valid only for the same event stream (module docstring)."""
-    c = curvature[np.isfinite(curvature["orc"].to_numpy(dtype=float))
-                  & (curvature["radius"].to_numpy(dtype=float) == float(radius))]
+def orc_memo_from_cache(curvature, radius, include_attempted: bool = False) -> dict:
+    """ORC memo from a curvature cache written by the curvature stage (notebooks/30_curvature.ipynb) or by
+    precompute_matrix_orc, so a pipeline run reuses expensive ORC values instead of recomputing them. Rows with a
+    finite orc at the requested radius enter; with include_attempted, also rows marked `orc_attempted` whose
+    value is NaN (they enter as NaN, so a strict cell writes NaN instead of missing them; a frame without the
+    column counts as none attempted). Valid only for the same event stream (module docstring)."""
+    orc = curvature["orc"].to_numpy(dtype=float)
+    at_r = curvature["radius"].to_numpy(dtype=float) == float(radius)
+    keep = np.isfinite(orc) & at_r
+    if include_attempted and "orc_attempted" in curvature.columns:
+        keep |= np.isnan(orc) & curvature["orc_attempted"].fillna(False).to_numpy(dtype=bool) & at_r
+    c = curvature[keep]
     return {_memo_key(s, d, e, t, radius): float(v) for s, d, e, t, v in
             zip(c["src_id"], c["dst_id"], c["event_id"], c["t"], c["orc"])}
 
