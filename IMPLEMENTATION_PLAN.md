@@ -130,7 +130,7 @@ Detecting-Network-Citation-Anomalies-Using-Graph-Curvature/
 - `edges.parquet`: `src_id, dst_id, t (days since epoch), doi_pair_key` — one row per citation event, src cites dst
 - `labels.parquet`: `doi_norm, reason_family, retraction_date, rwdb_snapshot_date`
 - `embeddings.npz`: `ids (N,), vectors (N, 768) float32`
-- `curvature_cache.parquet`: `src_id, dst_id, t, forman, orc (nullable), radius, computed_at_stage`
+- `curvature_cache.parquet`: `src_id, dst_id, t, forman, orc (nullable), radius, computed_at_stage, ref_known` (`ref_known`, added 2026-11-25 for S4.3: the cited work has a known reference at t; the S4.3 ORC precompute checkpoint adds per-row `orc_subgraph_edges, orc_capped, orc_lossy, orc_src_in_deg, orc_attempted, orc_error`)
 - `scores.parquet`: `src_id, dst_id, t, s_embed, s_geom, s_temp, s_curvdyn, total, model_variant, seed, config_hash` — NFR10: enough columns to trace any flag back to inputs
 - `runs/<variant>_<seed>/`: checkpoint + `metrics.json` + resolved config copy
 

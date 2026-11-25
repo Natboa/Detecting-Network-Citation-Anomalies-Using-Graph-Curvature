@@ -54,7 +54,7 @@ import pandas as pd
 
 CURVATURE_COLUMNS = [
     "event_id", "src_id", "dst_id", "t", "forman", "orc", "escalated", "radius",
-    "computed_at_stage",
+    "computed_at_stage", "ref_known",
 ]
 EVENT_COLUMNS = ["event_id", "src_id", "dst_id", "t"]
 DAYS_EPOCH = np.datetime64("1970-01-01", "D")
@@ -109,11 +109,14 @@ def forman_screen(events, *, count_duplicates=False, unknown_without_refs=False,
 
     Returns the curvature-cache frame (CURVATURE_COLUMNS) in canonical order
     (t, event_id): forman filled, orc NaN, escalated False, radius NaN,
-    computed_at_stage "screen".
+    computed_at_stage "screen", ref_known = the cited work has an out-edge at t
+    (out_deg_t(dst) > 0 after the self-loop rule), whatever unknown_without_refs
+    says; with it on, ref_known == ~isnan(forman).
     """
     ev = _canonical(events)
     n = len(ev)
     forman = np.empty(n, dtype=np.float64)
+    ref_known = np.zeros(n, dtype=bool)
     if n:
         rows, scored = _with_context(ev, context)
         m = len(rows)
@@ -152,6 +155,7 @@ def forman_screen(events, *, count_duplicates=False, unknown_without_refs=False,
             in_src = in_src - own
             out_dst = out_dst - own
         forman[:] = 2.0 - in_src - out_dst
+        ref_known[:] = out_dst > 0  # the cited work has a known reference at t (G13), after the self-loop rule
         if unknown_without_refs:
             forman[out_dst == 0] = np.nan
 
@@ -161,6 +165,7 @@ def forman_screen(events, *, count_duplicates=False, unknown_without_refs=False,
     out["escalated"] = np.zeros(n, dtype=bool)
     out["radius"] = np.nan
     out["computed_at_stage"] = "screen"
+    out["ref_known"] = ref_known
     return out[CURVATURE_COLUMNS]
 
 

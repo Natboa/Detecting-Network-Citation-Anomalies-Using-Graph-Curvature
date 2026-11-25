@@ -66,6 +66,7 @@ import datetime as _dt
 import math
 import hashlib
 import json
+import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -321,6 +322,69 @@ class OrcMemoMiss(ValueError):
     EventStore is built)."""
 
 
+def screen_stage(events, split, rcfg, *, context=None):
+    """The Forman screen of a run: (curvature frame with `escalated` from the train-fitted thresholds, thresholds,
+    stats). events: canonical events frame (order asserted); split aligned with it; context rows as in
+    curvature_stage. The first half of curvature_stage, shared with precompute_matrix_orc so cells and the
+    precompute select from one code path."""
+    from citecurv.curvature import screen as screen_mod
+
+    cc = rcfg["curvature"]
+    t0 = time.perf_counter()
+    n_context = 0 if context is None else int(len(context))
+    curv = screen_mod.forman_screen(events, count_duplicates=cc["screen_count_duplicates"],
+                                    unknown_without_refs=cc["screen_unknown_without_refs"], context=context)
+    if not np.array_equal(curv["event_id"].to_numpy(), events["event_id"].to_numpy()):
+        raise RuntimeError("forman_screen returned rows out of canonical order (pass canonical events)")
+    n_unknown = int(curv["forman"].isna().sum())  # cited work with no reference at t (screen_unknown_without_refs)
+    train = np.asarray(split) == "train"
+    if train.any() and not np.isfinite(curv["forman"].to_numpy(dtype=float)[train]).any():
+        raise ValueError(
+            "no training row has a screen value: every cited work has no reference at its event's time. With "
+            "curvature.screen_unknown_without_refs on, the reference lists of the cited works must be passed as "
+            f"context rows (citecurv.data.cited.reference_events); got {n_context} context rows")
+    th = screen_mod.screen_thresholds(curv, train, cc["screen_percentile_low"], cc["screen_percentile_high"],
+                                      inclusive=cc["screen_inclusive_ties"])
+    curv = screen_mod.apply_screen(curv, th)
+    n_screen = int(curv["escalated"].sum())
+    stats = {"n_events": int(len(curv)), "n_screen_flagged": n_screen,
+             "screen_rate": n_screen / max(len(curv), 1), "n_screen_unknown": n_unknown,
+             "n_context_rows": n_context, "screen_s": time.perf_counter() - t0}
+    return curv, th, stats
+
+
+def select_escalation(curv, split, mode, seed, cap, *, unknown_without_refs) -> pd.DataFrame:
+    """Copy of a screen frame with `escalated` as cell `mode` uses it: "screen+orc" keeps the screen's flags,
+    "screen" clears them, "random+orc" takes components.matched_random_escalation (per split, drawn only among
+    rows whose cited work has a known reference list when unknown_without_refs, Maor 2026-11-25); then the
+    optional ORC cap (a seeded subsample). Selection stats in .attrs["selection"]: n_selected, orc_subsampled,
+    n_eligible."""
+    from citecurv.scoring.components import matched_random_escalation
+
+    out = curv.copy()
+    eligible = (out["ref_known"].to_numpy(dtype=bool) if unknown_without_refs
+                else np.ones(len(out), dtype=bool))
+    if mode == "screen":
+        out["escalated"] = False
+    elif mode == "random+orc":
+        ids = matched_random_escalation(out, seed=seed, strata=split, eligible=eligible)  # per split
+        out["escalated"] = out["event_id"].isin(ids).to_numpy()
+    elif mode != "screen+orc":
+        raise ValueError(f"unknown curvature mode {mode!r}")
+    esc = np.flatnonzero(out["escalated"].to_numpy())
+    sel = {"n_selected": int(len(esc)), "n_eligible": int(eligible.sum())}
+    if cap is not None and len(esc) > int(cap):
+        keep = np.sort(np.random.default_rng(seed).choice(esc, size=int(cap), replace=False))
+        mask = np.zeros(len(out), dtype=bool)
+        mask[keep] = True
+        out["escalated"] = mask
+        sel["orc_subsampled"] = True
+    else:
+        sel["orc_subsampled"] = False
+    out.attrs["selection"] = sel
+    return out
+
+
 def curvature_stage(events, split, rcfg, *, seed=0, orc_fn=None, store=None, orc_memo=None, context=None,
                     require_orc_memo=False):
     """Curvature cache for the run's variant (None for no_curvature) plus thresholds and stage statistics.
@@ -337,52 +401,20 @@ def curvature_stage(events, split, rcfg, *, seed=0, orc_fn=None, store=None, orc
     holds exactly CURVATURE_COLUMNS, whether values were computed here or read from the memo. Returns
     (curvature frame | None, thresholds | None, stats dict).
     """
-    from citecurv.curvature import screen as screen_mod
     from citecurv.curvature import timeslice as ts_mod
     from citecurv.curvature.orc import escalate
-    from citecurv.curvature.screen import CURVATURE_COLUMNS, forman_screen, screen_thresholds
-    from citecurv.scoring.components import matched_random_escalation
+    from citecurv.curvature.screen import CURVATURE_COLUMNS
 
     mode = rcfg["variant_spec"]["curvature"]
     if mode == "none":
         return None, None, {"mode": "none"}
     cc = rcfg["curvature"]
-    t0 = time.perf_counter()
-    n_context = 0 if context is None else int(len(context))
-    curv = forman_screen(events, count_duplicates=cc["screen_count_duplicates"],
-                         unknown_without_refs=cc["screen_unknown_without_refs"], context=context)
-    if not np.array_equal(curv["event_id"].to_numpy(), events["event_id"].to_numpy()):
-        raise RuntimeError("forman_screen returned rows out of canonical order")
-    n_unknown = int(curv["forman"].isna().sum())  # cited work with no reference at t (screen_unknown_without_refs)
-    train = np.asarray(split) == "train"
-    if train.any() and not np.isfinite(curv["forman"].to_numpy(dtype=float)[train]).any():
-        raise ValueError(
-            "no training row has a screen value: every cited work has no reference at its event's time. With "
-            "curvature.screen_unknown_without_refs on, the reference lists of the cited works must be passed as "
-            f"context rows (citecurv.data.cited.reference_events); got {n_context} context rows")
-    th = screen_thresholds(curv, train, cc["screen_percentile_low"], cc["screen_percentile_high"],
-                           inclusive=cc["screen_inclusive_ties"])
-    curv = screen_mod.apply_screen(curv, th)
-    n_screen = int(curv["escalated"].sum())
-    stats = {"mode": mode, "n_events": int(len(curv)), "n_screen_flagged": n_screen,
-             "screen_rate": n_screen / max(len(curv), 1), "n_screen_unknown": n_unknown,
-             "n_context_rows": n_context, "screen_s": time.perf_counter() - t0}
-    if mode == "screen":
-        curv["escalated"] = False
-    elif mode == "random+orc":
-        ids = matched_random_escalation(curv, seed=seed, strata=split)  # per split: no test -> train path
-        curv["escalated"] = curv["event_id"].isin(ids).to_numpy()
-    esc = np.flatnonzero(curv["escalated"].to_numpy())
-    stats["n_selected"] = int(len(esc))
-    cap = cc["orc_max_events"]
-    if cap is not None and len(esc) > int(cap):
-        keep = np.sort(np.random.default_rng(seed).choice(esc, size=int(cap), replace=False))
-        mask = np.zeros(len(curv), dtype=bool)
-        mask[keep] = True
-        curv["escalated"] = mask
-        stats["orc_subsampled"] = True
-    else:
-        stats["orc_subsampled"] = False
+    curv, th, stats = screen_stage(events, split, rcfg, context=context)
+    stats["mode"] = mode
+    n_context = stats["n_context_rows"]
+    curv = select_escalation(curv, split, mode, seed, cc["orc_max_events"],
+                             unknown_without_refs=cc["screen_unknown_without_refs"])
+    stats.update(curv.attrs["selection"])
     if mode in ("screen+orc", "random+orc"):
         radius = cc["orc_radius"]
         t1 = time.perf_counter()
@@ -839,6 +871,306 @@ def orc_memo_from_cache(curvature, radius, include_attempted: bool = False) -> d
     c = curvature[keep]
     return {_memo_key(s, d, e, t, radius): float(v) for s, d, e, t, v in
             zip(c["src_id"], c["dst_id"], c["event_id"], c["t"], c["orc"])}
+
+
+# ----------------------------------------------------------------- ORC precompute for the matrix (S4.3)
+
+
+def context_hash(context) -> str:
+    """First 12 hex chars of sha256 over the canonical context rows; "none" without context rows."""
+    if context is None or not len(context):
+        return "none"
+    c = pd.DataFrame({"event_id": context["event_id"].to_numpy(dtype=np.int64),
+                      "src_id": context["src_id"].astype(str).to_numpy(dtype=object),
+                      "dst_id": context["dst_id"].astype(str).to_numpy(dtype=object),
+                      "t": context["t"].to_numpy(dtype=np.int64)})
+    c = c.sort_values(["t", "event_id"], kind="mergesort")
+    h = hashlib.sha256(pd.util.hash_pandas_object(c[EVENT_COLUMNS], index=False).to_numpy().tobytes())
+    return h.hexdigest()[:12]
+
+
+def orc_settings_hash(rcfg: dict) -> str:
+    """Hash of the resolved curvature settings without orc.proc (worker processes change no value)."""
+    cc = copy.deepcopy(rcfg["curvature"])
+    cc["orc"] = {k: v for k, v in (cc.get("orc") or {}).items() if k != "proc"}
+    return _config_hash(cc)
+
+
+def build_context(works, refs, events):
+    """Context rows of the cited works' reference lists (citecurv.data.cited.reference_events), the one place
+    the notebook and the ORC job build them: the pulled works' own references are already event rows."""
+    from citecurv.data.cited import reference_events
+
+    return reference_events(refs, exclude_src=set(works["work_id"].astype(str)),
+                            start_event_id=int(events["event_id"].max()) + 1)
+
+
+def _write_heartbeat(path, payload: dict) -> None:
+    """Write the heartbeat JSON atomically (local disk; read by the notebook's watchdog)."""
+    if path is None:
+        return
+    path = Path(path)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(payload), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _read_json(path):
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+CKPT_ROW_COLUMNS = ("orc_subgraph_edges", "orc_capped", "orc_lossy", "orc_src_in_deg", "orc_attempted",
+                    "orc_error")
+
+
+def _ckpt_keys(frame, radius):
+    return [_memo_key(s, d, e, t, radius) for s, d, e, t in
+            zip(frame["src_id"], frame["dst_id"], frame["event_id"], frame["t"])]
+
+
+def _sidecar_check(side: dict, want: dict, what: str, keys) -> None:
+    for k in keys:
+        if side.get(k) != want[k]:
+            label = {"settings_hash": "settings", "data_hash": "data", "context_hash": "context"}.get(k, k)
+            raise ValueError(f"{what}: stored {label} {side.get(k)!r} differs from {want[k]!r}")
+
+
+def precompute_matrix_orc(events, cutoff, rcfg, seeds, *, out_path, context=None, known=None, known_max_t=None,
+                          orc_fn=None, chunk=5000, batch=1, worker=None, order_seed=0, max_chunks=None,
+                          heartbeat=None, freeze_gc=False, retry_errors=False, max_error_share=0.001) -> dict:
+    """ORC values for every escalated row of every matrix cell, computed once, resumable (S4.3 plan, Task 3).
+
+    events: events frame in any order (canonicalized here); cutoff: days since epoch, the split is built as
+    run_pipeline builds it (val_frac of rcfg). Targets = the screen set (cells full, no_temporal, full_learned)
+    united with the ollivier_only selection of every seed in `seeds` (one select_escalation code path), processed
+    in a seeded random order (order_seed) so a chunk's timing is a fair running projection. An ORC cap
+    (orc_max_events) is refused: its draw depends on the cell seed.
+
+    out_path: parquet checkpoint (every row ever computed: curvature-cache columns plus the per-row ORC columns),
+    written to a temporary file and moved into place after every chunk; sidecar <out_path>.json with the
+    settings hash (orc_settings_hash), data_hash (events, no labels), context_hash, cutoff, radius, the union of
+    the seeds and n_targets. A rerun refuses another settings, data, context, cutoff or radius, accepts a
+    different seed list (fewer seeds compute nothing and drop no row) and takes ORC values by key from the file.
+    known: a checkpoint path (its sidecar must match settings, context and radius; its data may differ: a
+    shuffled stream) whose values fill target keys with t <= known_max_t (required with known), marked attempted.
+    heartbeat: a local JSON path rewritten at each setup phase and before every ORC call ({phase, time, in_flight,
+    clean}); a heartbeat left with clean false marks its in-flight rows attempted with orc_error
+    "killed: timeout"; retry_errors recomputes rows with an error. The run stops (RuntimeError, before the chunk
+    is written) when rows with an error exceed max_error_share of the targets. A dead ORC worker is restarted
+    once. Returns a stats dict (see the plan's Interfaces block).
+    """
+    import gc
+
+    from citecurv.curvature import timeslice as ts_mod
+    from citecurv.curvature.orc import OrcWorker, OrcWorkerDied, escalate
+    from citecurv.curvature.screen import CURVATURE_COLUMNS
+    from citecurv.eval.split import split_counts, split_events
+
+    t_start = time.perf_counter()
+    cc = rcfg["curvature"]
+    if cc.get("orc_max_events") is not None:
+        raise ValueError("precompute_matrix_orc refuses an ORC cap (orc_max_events): its draw depends on the cell seed")
+    if known is not None and known_max_t is None:
+        raise ValueError("known values need known_max_t (only keys with t <= known_max_t may be reused)")
+    radius = int(cc["orc_radius"])
+    out_path = Path(out_path)
+    side_path = out_path.with_suffix(".json")
+    hb = {"phase": "screen", "time": time.time(), "in_flight": [], "clean": False}
+    prev_hb = _read_json(heartbeat) if heartbeat is not None else None
+    _write_heartbeat(heartbeat, hb)
+
+    ev = _canonical_events(events)
+    split = split_events(ev, int(cutoff), val_frac=rcfg["split"]["val_frac"]).to_numpy(dtype=object)
+    want = {"settings_hash": orc_settings_hash(rcfg), "data_hash": data_hash(ev), "context_hash": context_hash(context),
+            "cutoff": int(cutoff), "radius": radius}
+    curv, _, sstats = screen_stage(ev, split, rcfg, context=context)
+    uwr = cc["screen_unknown_without_refs"]
+    target = select_escalation(curv, split, "screen+orc", 0, None, unknown_without_refs=uwr)["escalated"].to_numpy()
+    for s in seeds:
+        target = target | select_escalation(curv, split, "random+orc", int(s), None,
+                                            unknown_without_refs=uwr)["escalated"].to_numpy()
+    # the checkpoint frame holds the target rows only (a few percent of the events)
+    frame = curv.loc[target].reset_index(drop=True)
+    frame["escalated"] = True
+    loop = (frame["src_id"] == frame["dst_id"]).to_numpy()
+    for c, d in {"orc_subgraph_edges": np.nan, "orc_capped": False, "orc_lossy": False, "orc_src_in_deg": np.nan,
+                 "orc_attempted": False, "orc_error": ""}.items():
+        frame[c] = d
+    frame["orc_error"] = frame["orc_error"].astype(object)
+    keys = _ckpt_keys(frame, radius)
+    pos_of = {k: i for i, k in enumerate(keys)}
+    fill_cols = ["orc", "radius", "computed_at_stage", *CKPT_ROW_COLUMNS]
+
+    def fill_from(src: pd.DataFrame, mask_fn=None):
+        n = 0
+        cols = [c for c in fill_cols if c in src.columns]
+        for k, row in zip(_ckpt_keys(src, radius), src[cols].itertuples(index=False)):
+            i = pos_of.get(k)
+            if i is None or (mask_fn is not None and not mask_fn(k)):
+                continue
+            for c, v in zip(cols, row):
+                frame.iat[i, frame.columns.get_loc(c)] = v
+            frame.iat[i, frame.columns.get_loc("orc_attempted")] = True
+            frame.iat[i, frame.columns.get_loc("radius")] = float(radius)
+            n += 1
+        return n
+
+    # resume from the checkpoint (same settings, data, context, cutoff, radius)
+    prior = None
+    dirty = False
+    seed_union = sorted({int(s) for s in seeds})
+    if out_path.exists():
+        side = _read_json(side_path)
+        if side is None:
+            raise ValueError(f"checkpoint {out_path} has no readable sidecar {side_path}")
+        _sidecar_check(side, want, f"checkpoint {out_path}", ("settings_hash", "data_hash", "context_hash", "cutoff",
+                                                                "radius"))
+        prior = pd.read_parquet(out_path)
+        fill_from(prior)
+        seed_union = sorted(set(seed_union) | {int(s) for s in side.get("seeds", [])})
+    n_known = 0
+    if known is not None:
+        kpath = Path(known)
+        kside = _read_json(kpath.with_suffix(".json"))
+        if kside is None:
+            raise ValueError(f"known checkpoint {kpath} has no readable sidecar")
+        _sidecar_check(kside, want, f"known checkpoint {kpath}", ("settings_hash", "context_hash", "radius"))
+        kframe = pd.read_parquet(kpath)
+        kframe = kframe[kframe["orc_attempted"].fillna(False).astype(bool) if "orc_attempted" in kframe.columns
+                        else np.isfinite(kframe["orc"].to_numpy(dtype=float))]
+        att = frame["orc_attempted"].to_numpy(dtype=bool).copy()
+        n_known = fill_from(kframe, mask_fn=lambda k: k[3] <= int(known_max_t) and not att[pos_of[k]])
+        dirty = dirty or n_known > 0
+    # rows in flight when an earlier run was killed
+    if prev_hb and not prev_hb.get("clean", True) and prev_hb.get("in_flight"):
+        ids = set(int(x) for x in prev_hb["in_flight"])
+        hit = np.flatnonzero(frame["event_id"].isin(ids).to_numpy() & ~frame["orc_attempted"].to_numpy())
+        dirty = dirty or len(hit) > 0
+        for i in hit:
+            frame.iat[i, frame.columns.get_loc("orc")] = np.nan
+            frame.iat[i, frame.columns.get_loc("radius")] = float(radius)
+            frame.iat[i, frame.columns.get_loc("computed_at_stage")] = "escalate"
+            frame.iat[i, frame.columns.get_loc("orc_attempted")] = True
+            frame.iat[i, frame.columns.get_loc("orc_error")] = "killed: timeout"
+    if retry_errors:
+        err = frame["orc_error"].astype(str).ne("").to_numpy()
+        frame.loc[err, "orc_attempted"] = False
+        frame.loc[err, "orc_error"] = ""
+        frame.loc[err, "orc"] = np.nan
+
+    tpos = np.flatnonzero(~loop)
+    order = tpos[np.random.default_rng(order_seed).permutation(len(tpos))]
+    n_targets = int(len(tpos))
+
+    def pending():
+        att = frame["orc_attempted"].to_numpy(dtype=bool)
+        return order[~att[order]]
+
+    def write_checkpoint():
+        att = frame["orc_attempted"].to_numpy(dtype=bool)
+        cols = list(CURVATURE_COLUMNS) + list(CKPT_ROW_COLUMNS)
+        rows = frame.loc[att, cols]
+        if prior is not None and len(prior):
+            have = set(_ckpt_keys(rows, radius))
+            extra = prior[[k not in have for k in _ckpt_keys(prior, radius)]]
+            rows = pd.concat([rows, extra[[c for c in cols if c in extra.columns]]], ignore_index=True)
+        tmp = out_path.with_suffix(".tmp")
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        rows.to_parquet(tmp, index=False)
+        os.replace(tmp, out_path)
+        side_tmp = side_path.with_suffix(".jtmp")
+        side_tmp.write_text(json.dumps({**want, "seeds": seed_union, "n_targets": n_targets,
+                                        "n_rows": int(len(rows))}, indent=1), encoding="utf-8")
+        os.replace(side_tmp, side_path)
+
+    todo = pending()
+    store = None
+    n_chunks = n_done = 0
+    restarted = False
+    t_sub, t_orc = [], []
+    try:
+        if len(todo):
+            hb.update(phase="store", time=time.time())
+            _write_heartbeat(heartbeat, hb)
+            cols = ["src_id", "dst_id", "t"]
+            rows_all = ev if context is None or not len(context) else pd.concat([ev[cols], context[cols]],
+                                                                                 ignore_index=True)
+            store = ts_mod.EventStore(rows_all)
+            if freeze_gc:
+                gc.freeze()
+
+        def progress(ids):
+            hb.update(phase="orc", time=time.time(), in_flight=[int(x) for x in ids])
+            _write_heartbeat(heartbeat, hb)
+
+        while len(todo) and (max_chunks is None or n_chunks < max_chunks):
+            rows = todo[:chunk]
+            before = int(frame["orc_attempted"].sum())
+            try:
+                frame_new, est = escalate(ev, frame, store, radius, cc["orc_subgraph_edge_cap"], prune=cc["orc_prune"],
+                                          orc_fn=orc_fn, stage="escalate", rows=rows, batch=batch, worker=worker,
+                                          progress=progress, **cc["orc"])
+            except OrcWorkerDied as exc:
+                if restarted or worker is None:
+                    raise
+                restarted = True
+                frame = exc.partial_frame
+                worker.close()
+                worker = OrcWorker(worker.orc_fn_path, **worker.knobs)
+                todo = pending()
+                continue
+            frame = frame_new
+            n_err = int(frame["orc_error"].astype(str).ne("").sum())
+            if n_err > max_error_share * max(n_targets, 1):
+                raise RuntimeError(f"ORC precompute stopped: {n_err} rows with an error out of {n_targets} targets "
+                                   f"(limit {max_error_share:.3%}); first: "
+                                   f"{frame.loc[frame['orc_error'].astype(str).ne(''), 'orc_error'].iloc[0][:300]}")
+            made = int(frame["orc_attempted"].sum()) - before
+            if made == 0:
+                raise RuntimeError(f"ORC precompute made no progress on a chunk of {len(rows)} rows")
+            n_done += made
+            n_chunks += 1
+            t_sub.append(est["subgraph_s_per_event"])
+            t_orc.append(est["orc_s_per_event"])
+            write_checkpoint()
+            todo = pending()
+        if not out_path.exists() or (n_chunks == 0 and dirty):
+            write_checkpoint()
+    finally:
+        if freeze_gc and store is not None:
+            gc.unfreeze()
+    att = frame["orc_attempted"].to_numpy(dtype=bool)
+    orc = frame["orc"].to_numpy(dtype=float)
+    errs = frame["orc_error"].astype(str).ne("").to_numpy()
+    hb.update(phase="done", time=time.time(), in_flight=[], clean=True)
+    _write_heartbeat(heartbeat, hb)
+
+    def mean(x):
+        x = [v for v in x if v is not None and np.isfinite(v)]
+        return float(np.mean(x)) if x else None
+
+    counts = split_counts(ev, split)
+    return {"n_targets": n_targets, "n_known": int(n_known), "n_done": int(n_done),
+            "n_pending": int(len(pending())), "n_attempted_nan": int((att & np.isnan(orc) & ~errs).sum()),
+            "n_errors": int(errs.sum()), "n_chunks_run": int(n_chunks),
+            "seconds": time.perf_counter() - t_start, "subgraph_s_per_event": mean(t_sub),
+            "orc_s_per_event": mean(t_orc), "split_counts": counts, "n_screen_flagged": sstats["n_screen_flagged"],
+            "n_eligible": int(curv["ref_known"].sum()) if uwr else int(len(curv)), "seeds": seed_union}
+
+
+def load_orc_memo(out_path, *, data_hash, context_hash, settings_hash, radius) -> dict:
+    """The ORC memo of a precompute checkpoint, through its sidecar: refuses another data, context, settings or
+    radius; attempted rows with a NaN value enter as NaN (orc_memo_from_cache include_attempted)."""
+    out_path = Path(out_path)
+    side = _read_json(out_path.with_suffix(".json"))
+    if side is None:
+        raise ValueError(f"checkpoint {out_path} has no readable sidecar")
+    want = {"data_hash": data_hash, "context_hash": context_hash, "settings_hash": settings_hash, "radius": int(radius)}
+    _sidecar_check(side, want, f"ORC memo {out_path}", ("data_hash", "context_hash", "settings_hash", "radius"))
+    return orc_memo_from_cache(pd.read_parquet(out_path), radius, include_attempted=True)
 
 
 # ----------------------------------------------------------------- sanity gates (S3.4, S4.3)

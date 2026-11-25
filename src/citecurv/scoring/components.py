@@ -779,7 +779,7 @@ def fit_curvdyn_model(events, curvature, *, train_mask, embeddings=None, tgn_emb
                         max_fit_rows, seed)
 
 
-def matched_random_escalation(curvature, *, seed=0, strata=None) -> np.ndarray:
+def matched_random_escalation(curvature, *, seed=0, strata=None, eligible=None) -> np.ndarray:
     """Event ids to escalate in the ollivier_only cell: a uniform random sample
     (seeded) of the same size as the screen's escalated set, so the cell spends
     the same ORC budget without any Forman signal choosing the events. The
@@ -793,20 +793,32 @@ def matched_random_escalation(curvature, *, seed=0, strata=None) -> np.ndarray:
     all rows, so the number of test-period screen flags changes which TRAIN rows
     get an ORC value, and with it the train-fitted ZStats and s_curvdyn
     regressor. With strata the draw for a stratum reads only that stratum's
-    rows, so test-period events cannot move any pre-cutoff selection."""
+    rows, so test-period events cannot move any pre-cutoff selection.
+
+    eligible: optional bool array aligned with the rows; the draw then takes only
+    eligible rows (the pipeline passes ref_known under G13: rows whose cited
+    work has a known reference list, the pool the screen itself can flag;
+    Maor, 2026-11-25). The size per stratum stays the screen's count there,
+    capped at the stratum's eligible count. With every row eligible the draw is
+    exactly the one without the argument."""
     ids = curvature["event_id"].to_numpy(dtype=np.int64)
     flagged = curvature["escalated"].fillna(False).astype(bool).to_numpy()
+    ok = np.ones(len(ids), dtype=bool) if eligible is None else np.asarray(eligible, dtype=bool)
+    if ok.shape != (len(ids),):
+        raise ValueError("eligible must be aligned with the curvature rows")
     if strata is None:
         rng = np.random.default_rng(seed)
-        return np.sort(rng.choice(ids, size=int(flagged.sum()), replace=False))
+        pool = ids[ok]
+        return np.sort(rng.choice(pool, size=min(int(flagged.sum()), len(pool)), replace=False))
     lab = np.asarray(strata).astype(str)
     if lab.shape != (len(ids),):
         raise ValueError("strata must be aligned with the curvature rows")
     picked = []
     for g in np.unique(lab):
         rows = lab == g
+        pool = ids[rows & ok]
         rng = np.random.default_rng([int(seed), zlib.crc32(g.encode("utf-8"))])
-        picked.append(rng.choice(ids[rows], size=int(flagged[rows].sum()), replace=False))
+        picked.append(rng.choice(pool, size=min(int(flagged[rows].sum()), len(pool)), replace=False))
     return np.sort(np.concatenate(picked)) if picked else np.zeros(0, dtype=np.int64)
 
 

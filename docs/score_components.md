@@ -328,7 +328,7 @@ only: no score, weight or label changes.
 | `full` | on | max(\|z_F\|, \|z_O\|) | on | target F | Forman screen + ORC escalation |
 | `no_curvature` | on | off (NaN) | on | off (NaN) | TGN trained without curvature features; curvature stage not run |
 | `forman_only` | on | \|z_F\|, ORC ignored | on | target F | no escalation |
-| `ollivier_only` | on | \|z_O\| on escalated events, NaN elsewhere | on | target kappa on escalated events, NaN elsewhere | escalation set = `matched_random_escalation(curvature, seed)`; Forman values are never read |
+| `ollivier_only` | on | \|z_O\| on escalated events, NaN elsewhere | on | target kappa on escalated events, NaN elsewhere | escalation set = `matched_random_escalation(curvature, seed, eligible=ref_known)`; reads only whether the cited work's reference list is known, never a Forman value |
 | `no_temporal` | on (from the ablated encoder) | as `full` | on (D11) | as `full` | DyGLib memory / time encoding off |
 
 `ollivier_only`: the screen is replaced by a uniform random sample of events of the same size as the screen's
@@ -336,8 +336,13 @@ escalated set (seeded), so the cell spends the same ORC budget while no Forman s
 events. The pipeline draws the sample inside each split (train, val, test) with that split's screen count, so
 the number of test-period flags cannot change which training rows get an ORC value (NFR3; a single global
 draw did, which moved the train-fitted ZStats when test timestamps were shuffled). Most events then have no kappa, so s_geom and s_curvdyn are NaN for them and contribute nothing; that is
-the fair reading of "Ollivier only at the same budget". A test checks that changing every Forman value leaves this
-cell's output unchanged. Disabled components are all-NaN and listed in `attrs["disabled_components"]`.
+the fair reading of "Ollivier only at the same budget". Eligibility (Maor, 2026-11-25, "Yes, skip them"): with
+`screen_unknown_without_refs` on (G13), the sample is drawn only among rows whose cited work has a known reference
+list at t (`ref_known` of the screen frame), the pool the screen itself can flag; for the other rows ORC has
+nothing to measure and would return kappa = 0, the extreme value, so drawing them would make the cell look weaker
+for no reason. A test checks that an increasing affine change of every Forman value (unknown rows kept unknown)
+leaves this cell's selection unchanged. Disabled components are all-NaN and listed in
+`attrs["disabled_components"]`.
 
 ## 9. How the combiner consumes the components
 
