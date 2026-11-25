@@ -26,8 +26,13 @@ def run_job(job: dict, *, orc_fn=None, freeze_gc: bool = False) -> dict:
     from citecurv import pipeline as P
     from citecurv.config import load_config
 
+    import time
+
     hb = job.get("heartbeat")
-    P._write_heartbeat(hb, {"phase": "load", "in_flight": [], "clean": False})
+    prev = P._read_json(hb) if hb else None
+    carried = list(prev.get("in_flight") or []) if prev and not prev.get("clean", True) else []
+    # keep the ids that were in flight when an earlier run was killed: precompute marks them
+    P._write_heartbeat(hb, {"phase": "load", "time": time.time(), "in_flight": carried, "clean": False})
     events = pd.read_parquet(job["events"])
     works = pd.read_parquet(job["works"], columns=["work_id"])
     refs = pd.read_parquet(job["cited_joint"], columns=["work_id", "pub_date", "ref_ids"])
@@ -48,7 +53,7 @@ def run_job(job: dict, *, orc_fn=None, freeze_gc: bool = False) -> dict:
             context=context, known=job.get("known"), known_max_t=job.get("known_max_t"), orc_fn=orc_fn,
             chunk=int(job.get("chunk") or 5000), batch=int(job.get("batch") or 1), worker=worker,
             order_seed=int(job.get("order_seed") or 0), max_chunks=job.get("max_chunks"), heartbeat=hb,
-            freeze_gc=freeze_gc)
+            freeze_gc=freeze_gc, max_error_share=float(job.get("max_error_share") or 0.001))
     finally:
         if worker is not None:
             worker.close()

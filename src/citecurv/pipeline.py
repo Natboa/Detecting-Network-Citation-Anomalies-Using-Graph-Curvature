@@ -453,12 +453,12 @@ def curvature_stage(events, split, rcfg, *, seed=0, orc_fn=None, store=None, orc
                 for key, v, was_hit in zip(keys, vals, hit):
                     if not was_hit and np.isfinite(v):
                         orc_memo[key] = float(v)
-            stats.update({"n_orc_computed": int(est["n_computed"]),
+            stats.update({"n_orc_computed": int(est["n_computed"]), "n_errors": int(est["n_errors"]),
                           "orc_s_per_computed": est["total_s_per_event"],
                           "mean_subgraph_edges": est["mean_subgraph_edges"],
                           "n_capped": est["n_capped"], "n_capped_lossy": est["n_capped_lossy"]})
         else:
-            stats.update({"n_orc_computed": 0, "orc_s_per_computed": None, "mean_subgraph_edges": None,
+            stats.update({"n_orc_computed": 0, "n_errors": 0, "orc_s_per_computed": None, "mean_subgraph_edges": None,
                           "n_capped": None, "n_capped_lossy": None})
         stats["orc_s"] = time.perf_counter() - t1
     else:
@@ -978,8 +978,10 @@ def precompute_matrix_orc(events, cutoff, rcfg, seeds, *, out_path, context=None
     radius = int(cc["orc_radius"])
     out_path = Path(out_path)
     side_path = out_path.with_suffix(".json")
-    hb = {"phase": "screen", "time": time.time(), "in_flight": [], "clean": False}
     prev_hb = _read_json(heartbeat) if heartbeat is not None else None
+    carried = (list(prev_hb.get("in_flight") or []) if prev_hb and not prev_hb.get("clean", True) else [])
+    # rows in flight at a kill stay in the heartbeat until their marks are saved (a second kill must not lose them)
+    hb = {"phase": "screen", "time": time.time(), "in_flight": carried, "clean": False}
     _write_heartbeat(heartbeat, hb)
 
     ev = _canonical_events(events)
@@ -1021,6 +1023,7 @@ def precompute_matrix_orc(events, cutoff, rcfg, seeds, *, out_path, context=None
     # resume from the checkpoint (same settings, data, context, cutoff, radius)
     prior = None
     dirty = False
+    killed_marked = False
     seed_union = sorted({int(s) for s in seeds})
     if out_path.exists():
         side = _read_json(side_path)
@@ -1049,6 +1052,7 @@ def precompute_matrix_orc(events, cutoff, rcfg, seeds, *, out_path, context=None
         ids = set(int(x) for x in prev_hb["in_flight"])
         hit = np.flatnonzero(frame["event_id"].isin(ids).to_numpy() & ~frame["orc_attempted"].to_numpy())
         dirty = dirty or len(hit) > 0
+        killed_marked = len(hit) > 0
         for i in hit:
             frame.iat[i, frame.columns.get_loc("orc")] = np.nan
             frame.iat[i, frame.columns.get_loc("radius")] = float(radius)
@@ -1086,6 +1090,9 @@ def precompute_matrix_orc(events, cutoff, rcfg, seeds, *, out_path, context=None
                                         "n_rows": int(len(rows))}, indent=1), encoding="utf-8")
         os.replace(side_tmp, side_path)
 
+    if killed_marked:  # save the marks before the (long) store build
+        write_checkpoint()
+    hb["in_flight"] = []
     todo = pending()
     store = None
     n_chunks = n_done = 0

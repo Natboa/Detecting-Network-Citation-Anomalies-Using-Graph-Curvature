@@ -526,3 +526,47 @@ def test_orc_worker_equals_in_process_with_the_library():
     finally:
         w.close()
     np.testing.assert_allclose(inproc["orc"].to_numpy(), viaw["orc"].to_numpy(), atol=1e-12, equal_nan=True)
+
+
+def test_missing_library_still_raises_through_escalate():
+    curv = flagged(forman_screen(HAND), [5, 9, 10])
+
+    def no_lib(G, edges, **knobs):
+        raise ImportError("install GraphRicciCurvature")
+
+    with pytest.raises(ImportError):
+        escalate(HAND, curv, EventStore(HAND), radius=1, orc_fn=no_lib)
+
+
+def test_systematic_failure_on_the_first_rows_raises():
+    ev = random_stream(seed=3, n_papers=30, refs=3)
+    curv = flagged(forman_screen(ev), ev["event_id"].iloc[::3])
+
+    def always(G, edges, **knobs):
+        raise ZeroDivisionError("ATD")
+
+    with pytest.raises(RuntimeError, match="first"):
+        escalate(ev, curv, EventStore(ev), radius=1, orc_fn=always)
+
+
+def test_curvature_stage_reports_orc_errors():
+    from citecurv.data.synthetic import load_fixture
+    from citecurv.eval.split import split_events
+    from citecurv.pipeline import curvature_stage, resolve_config
+
+    fx = load_fixture()
+    split = split_events(fx["events"], fx["meta"]["t_min"] - 1).to_numpy(dtype=object)
+    rcfg = resolve_config({"pipeline": {"screen_percentile_low": 0.1, "screen_percentile_high": 0.9}})
+    calls = {"n": 0, "bad": None}
+
+    def third_fails(G, edges, **knobs):
+        calls["n"] += 1
+        if calls["n"] == 3:
+            calls["bad"] = tuple(edges[0])
+        if calls["bad"] is not None and tuple(edges[0]) == calls["bad"]:
+            raise RuntimeError("one bad row")
+        return {tuple(e): -0.5 for e in edges}
+
+    _, _, stats = curvature_stage(fx["events"], split, rcfg, orc_fn=third_fails)
+    assert stats["n_errors"] == 1
+

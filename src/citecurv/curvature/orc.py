@@ -160,6 +160,7 @@ def cap_subgraph(G, u, v, edge_cap, prune=False):
     return H, {"n_edges": n_edges, "n_kept": len(kept), "capped": capped, "lossy": lossy}
 
 
+FIRST_ROWS = 5  # escalate raises when each of its first FIRST_ROWS computed rows failed (systematic failure)
 ROW_COLUMNS = ("orc_subgraph_edges", "orc_capped", "orc_lossy", "orc_src_in_deg", "orc_attempted", "orc_error")
 
 
@@ -354,6 +355,7 @@ def escalate(events, curv, store=None, radius=1, edge_cap=5000, *, prune=False, 
     sizes, kept_sizes, t_sub, t_orc = [], [], [], []
     n_capped = n_lossy = n_errors = 0
     done = []
+    checked_first = False
     t_start = time.perf_counter()
 
     def call(graphs):
@@ -416,6 +418,8 @@ def escalate(events, curv, store=None, radius=1, edge_cap=5000, *, prune=False, 
         except OrcWorkerDied as exc:
             exc.partial_frame = out
             raise
+        except (ImportError, TypeError):
+            raise  # a missing library or a wrong knob is not a row error
         except Exception:
             for i, H, u, v, info, in_deg in built:
                 try:
@@ -425,10 +429,18 @@ def escalate(events, curv, store=None, radius=1, edge_cap=5000, *, prune=False, 
                 except OrcWorkerDied as exc:
                     exc.partial_frame = out
                     raise
+                except (ImportError, TypeError):
+                    raise
                 except Exception as exc:  # a row error: recorded, the run moves on
                     val, err = float("nan"), f"{type(exc).__name__}: {exc}"[:2000]
                 record(i, (info, in_deg), val, err)
         t2 = time.perf_counter()
+        if not checked_first and len(done) >= FIRST_ROWS:
+            checked_first = True
+            first = [out.iat[i, col["orc_error"]] for i in done[:FIRST_ROWS]]
+            if all(first):
+                raise RuntimeError(f"ORC failed on each of the first {FIRST_ROWS} rows (a systematic failure, not "
+                                   f"row errors): {first[0][:500]}")
         t_sub.extend([(t1 - t0) / len(built)] * len(built))
         t_orc.extend([(t2 - t1) / len(built)] * len(built))
 

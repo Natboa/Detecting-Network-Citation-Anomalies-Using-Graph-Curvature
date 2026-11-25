@@ -407,3 +407,62 @@ def test_orc_job_writes_a_heartbeat_per_batch(fx, tmp_path, monkeypatch):
     assert sum(p == "orc" for p in phases) == rec.calls == result["n_done"] > 0
     assert json.loads((tmp_path / "result.json").read_text())["n_pending"] == 0
     assert json.loads((tmp_path / "hb.json").read_text())["clean"] is True
+
+
+# ------------------------------------------------------------------ final review fixes
+
+def _job(fx, tmp_path):
+    ev, works = fx["events"], fx["works"]
+    ev.to_parquet(tmp_path / "events.parquet")
+    works[["work_id"]].to_parquet(tmp_path / "works.parquet")
+    pd.DataFrame({"work_id": ["cited_x"], "pub_date": ["2018-01-05"], "ref_ids": [["r1"]]}).to_parquet(
+        tmp_path / "cited_joint.parquet")
+    (tmp_path / "cfg.yaml").write_text(json.dumps(cfg()))
+    return {"events": str(tmp_path / "events.parquet"), "works": str(tmp_path / "works.parquet"),
+            "cited_joint": str(tmp_path / "cited_joint.parquet"), "shuffle": None, "config": str(tmp_path / "cfg.yaml"),
+            "cutoff": cut(fx), "seeds": [], "out_path": str(tmp_path / "orc.parquet"), "known": None,
+            "known_max_t": None, "batch": 1, "chunk": 5000, "worker": False, "order_seed": 0, "max_chunks": None,
+            "heartbeat": str(tmp_path / "hb.json"), "result": str(tmp_path / "result.json"), "max_error_share": 0.5}
+
+
+def test_job_restart_marks_the_rows_in_flight_at_the_kill(fx, tmp_path):
+    from citecurv.eval import orc_job
+
+    job = _job(fx, tmp_path)
+    probe = orc_job.run_job({**job, "out_path": str(tmp_path / "probe.parquet"), "heartbeat": str(tmp_path / "p.json"),
+                             "result": str(tmp_path / "p_res.json")}, orc_fn=Recorder())
+    victim = int(pd.read_parquet(tmp_path / "probe.parquet")["event_id"].iloc[0])
+    (tmp_path / "hb.json").write_text(json.dumps({"phase": "orc", "time": 0, "in_flight": [victim], "clean": False}))
+    rec = Recorder()
+    job_res = orc_job.run_job(job, orc_fn=rec)
+    got = pd.read_parquet(tmp_path / "orc.parquet").set_index("event_id")
+    assert got.loc[victim, "orc_error"] == "killed: timeout"
+    assert rec.calls == probe["n_targets"] - 1 and job_res["n_errors"] == 1
+
+
+def test_killed_marks_are_saved_before_the_store_is_built(fx, tmp_path, monkeypatch):
+    import citecurv.curvature.timeslice as ts_mod
+
+    ev, rcfg = fx["events"], rc()
+    out_path = tmp_path / "o.parquet"
+    precompute_matrix_orc(ev, cut(fx), rcfg, [], out_path=out_path, orc_fn=Recorder(), max_chunks=0)
+    victim = int(pd.read_parquet(tmp_path / "o.parquet")["event_id"].iloc[0]) if len(pd.read_parquet(out_path)) else None
+    if victim is None:
+        probe = Recorder()
+        precompute_matrix_orc(ev, cut(fx), rcfg, [], out_path=tmp_path / "p.parquet", orc_fn=probe)
+        victim = int(pd.read_parquet(tmp_path / "p.parquet")["event_id"].iloc[0])
+    hb = tmp_path / "hb.json"
+    hb.write_text(json.dumps({"phase": "orc", "time": 0, "in_flight": [victim], "clean": False}))
+
+    class Dies:
+        def __init__(self, *a, **k):
+            raise MemoryError("store build died")
+
+    monkeypatch.setattr(ts_mod, "EventStore", Dies)
+    with pytest.raises(MemoryError):
+        precompute_matrix_orc(ev, cut(fx), rcfg, [], out_path=out_path, orc_fn=Recorder(), heartbeat=hb,
+                              max_error_share=0.5)
+    got = pd.read_parquet(out_path).set_index("event_id")
+    assert got.loc[victim, "orc_error"] == "killed: timeout"
+    assert victim in json.loads(hb.read_text())["in_flight"] or json.loads(hb.read_text())["phase"] != "orc"
+
