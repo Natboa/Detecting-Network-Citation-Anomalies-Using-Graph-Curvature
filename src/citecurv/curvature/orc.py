@@ -160,14 +160,116 @@ def cap_subgraph(G, u, v, edge_cap, prune=False):
     return H, {"n_edges": n_edges, "n_kept": len(kept), "capped": capped, "lossy": lossy}
 
 
+ROW_COLUMNS = ("orc_subgraph_edges", "orc_capped", "orc_lossy", "orc_src_in_deg", "orc_attempted", "orc_error")
+
+
+class OrcWorkerDied(RuntimeError):
+    """The ORC worker process ended (EOF, broken pipe, killed). Not a row error: the rows of the batch in flight
+    stay pending. ``partial_frame`` holds escalate's frame with the batches finished before the death."""
+
+    def __init__(self, msg, partial_frame=None):
+        super().__init__(msg)
+        self.partial_frame = partial_frame
+
+
+class OrcFnError(RuntimeError):
+    """An exception raised by the ORC function inside the worker, sent back as text (a row error)."""
+
+
+def _resolve(path: str):
+    import importlib
+
+    mod, _, attr = path.partition(":")
+    if not attr:
+        raise ValueError(f"expected 'module:function', got {path!r}")
+    return getattr(importlib.import_module(mod), attr)
+
+
+def _worker_main(conn, orc_fn_path, knobs):
+    """Loop of the ORC worker process: build each graph in the node order given, call the ORC function, send the
+    values or the error text back."""
+    import traceback
+
+    fn = _resolve(orc_fn_path)
+    while True:
+        try:
+            msg = conn.recv()
+        except EOFError:
+            return
+        if msg[0] == "close":
+            return
+        _, nodes, edges, scored = msg
+        G = nx.DiGraph()
+        G.add_nodes_from(nodes)
+        G.add_edges_from((a, b, {"t": t}) for a, b, t in edges)
+        try:
+            conn.send(("ok", fn(G, scored, **knobs)))
+        except Exception:
+            conn.send(("err", traceback.format_exc(limit=3)))
+
+
+class OrcWorker:
+    """A long-lived ORC process started with the "spawn" context, so GraphRicciCurvature forks its pool from a
+    small process instead of one that holds a large EventStore. A plain non-daemonic Process with a pipe, never a
+    Pool: the library opens its own fork pool inside it, which a daemonic process may not do.
+
+    orc_fn_path: "module:function" importable in the child (default ORC: "citecurv.curvature.orc:orc_directed").
+    knobs: the ORC knobs, fixed for the worker's life (escalate checks them against its own).
+    """
+
+    def __init__(self, orc_fn_path: str = "citecurv.curvature.orc:orc_directed", **knobs):
+        import multiprocessing as mp
+
+        self.orc_fn_path = orc_fn_path
+        self.knobs = dict(knobs)
+        ctx = mp.get_context("spawn")
+        self._conn, child = ctx.Pipe()
+        self._proc = ctx.Process(target=_worker_main, args=(child, orc_fn_path, self.knobs), daemon=False)
+        self._proc.start()
+        child.close()
+
+    def compute(self, nodes: list, edges: list, scored: list) -> dict:
+        """nodes: in the order the graph must have them; edges: (a, b, t); scored: edges to return."""
+        try:
+            self._conn.send(("compute", nodes, edges, scored))
+            status, payload = self._conn.recv()
+        except (EOFError, BrokenPipeError, ConnectionResetError, OSError) as exc:
+            raise OrcWorkerDied(f"ORC worker ended: {exc!r} (exit code {self._proc.exitcode})") from exc
+        if status == "err":
+            raise OrcFnError(payload)
+        return payload
+
+    def alive(self) -> bool:
+        return self._proc.is_alive()
+
+    def close(self, timeout: float = 10.0):
+        try:
+            if self._proc.is_alive():
+                self._conn.send(("close",))
+        except (BrokenPipeError, OSError):
+            pass
+        self._proc.join(timeout)
+        if self._proc.is_alive():
+            self._proc.kill()
+            self._proc.join(timeout)
+        self._conn.close()
+
+
+def _orc_knobs_core(knobs) -> dict:
+    return {k: v for k, v in dict(knobs).items() if k != "proc"}
+
+
 def escalate(events, curv, store=None, radius=1, edge_cap=5000, *, prune=False, orc_fn=None,
-             max_events=None, stage="escalate", **orc_knobs):
+             max_events=None, stage="escalate", rows=None, batch=1, worker=None, progress=None, **orc_knobs):
     """Fill `orc` for escalated rows of the curvature cache.
 
     events: the events frame (used only to build an EventStore when store is
     None). curv: curvature cache frame (CONTRACTS.md) with `escalated` set by
-    apply_screen. For each escalated row with orc still NaN (so a second call
-    resumes after a checkpoint), in the frame's order, at most max_events rows:
+    apply_screen. rows: explicit row positions to compute, in the order given
+    (self-loops among them are skipped and counted); default = each escalated
+    row that is not a self-loop, has orc NaN and is not yet attempted
+    (`orc_attempted`, when the column exists), in the frame's order, so a
+    second call resumes after a checkpoint. At most max_events of those rows:
 
       1. G = store.subgraph_at(u, v, t, radius): edges with ts <= t, the scored
          instance (u, v, t) excluded, same-t rows of other events included.
@@ -186,58 +288,162 @@ def escalate(events, curv, store=None, radius=1, edge_cap=5000, *, prune=False, 
     from ts <= t (NFR3).
 
     Self-loop rows are skipped (orc stays NaN; ORC is undefined for them).
-    Escalated rows get radius and computed_at_stage = stage.
+    Every attempted row (a value, NaN or an error) gets radius and
+    computed_at_stage = stage and the per-row columns of ROW_COLUMNS:
+    orc_subgraph_edges (before the cap, scored edge included), orc_capped,
+    orc_lossy, orc_src_in_deg (in-degree of the citing work at t in its
+    subgraph; 0 means radius 1 is exact), orc_attempted, orc_error ("" when
+    fine).
+
+    batch > 1: up to `batch` subgraphs, nodes relabelled (k, node) with each
+    subgraph's node order kept, joined into one DiGraph; one ORC call scores
+    all their edges (one pool fork instead of `batch`). The subgraphs share no
+    node, so with shortest_path="pairwise" every value equals its per-event
+    value; it is refused otherwise. An exception raised by the ORC function is
+    retried row by row; a row that still raises is recorded as an error.
+    worker: an OrcWorker that runs the ORC function in its own process (its
+    knobs, without proc, must equal orc_knobs). A dead worker raises
+    OrcWorkerDied (rows of the batch in flight stay pending; the frame with the
+    batches done before is on the exception). progress(event_ids) is called
+    before every ORC call with the ids in flight.
 
     Returns (updated copy of curv, stats dict): n_escalated, n_pending,
-    n_computed, n_self_loops, mean/p95/max_subgraph_edges (before the cap,
-    scored edge included), mean/max_kept_edges, n_capped, n_capped_lossy,
-    subgraph_s_per_event, orc_s_per_event, total_s_per_event, seconds_total.
+    n_computed, n_self_loops, n_skipped_self_loops, n_errors, rows (per-row
+    columns of the rows computed here, with event_id), mean/p95/max_subgraph_edges,
+    mean/max_kept_edges, n_capped, n_capped_lossy, subgraph_s_per_event,
+    orc_s_per_event, total_s_per_event, seconds_total.
     """
-    if store is None:
-        store = EventStore(events)
+    batch = int(batch)
+    if batch < 1:
+        raise ValueError("batch must be >= 1")
+    if worker is not None and _orc_knobs_core(worker.knobs) != _orc_knobs_core(orc_knobs):
+        raise ValueError(f"worker knobs {worker.knobs} differ from the ORC knobs {orc_knobs}")
+    if batch > 1 and orc_knobs.get("shortest_path") != "pairwise":
+        raise ValueError("batch > 1 needs shortest_path='pairwise' (joined subgraphs must keep their own distances)")
     orc_fn = orc_fn or orc_directed
     out = curv.copy()
     out["orc"] = out["orc"].astype(float)
     out["radius"] = out["radius"].astype(float)
+    defaults = {"orc_subgraph_edges": np.nan, "orc_capped": False, "orc_lossy": False, "orc_src_in_deg": np.nan,
+                "orc_attempted": False, "orc_error": ""}
+    for c, d in defaults.items():
+        if c not in out.columns:
+            out[c] = d
+    out["orc_subgraph_edges"] = out["orc_subgraph_edges"].astype(float)
+    out["orc_src_in_deg"] = out["orc_src_in_deg"].astype(float)
+    for c in ("orc_capped", "orc_lossy", "orc_attempted"):
+        out[c] = out[c].fillna(False).astype(bool)
+    out["orc_error"] = out["orc_error"].fillna("").astype(object)
     esc = out["escalated"].to_numpy(dtype=bool)
     loop = (out["src_id"] == out["dst_id"]).to_numpy()
-    pending = np.flatnonzero(esc & ~loop & out["orc"].isna().to_numpy())
+    n_skipped_loops = 0
+    if rows is None:
+        pending = np.flatnonzero(esc & ~loop & out["orc"].isna().to_numpy() & ~out["orc_attempted"].to_numpy())
+    else:
+        rows = np.asarray(rows, dtype=np.int64)
+        n_skipped_loops = int(loop[rows].sum())
+        pending = rows[~loop[rows]]
     n_pending = len(pending)
     if max_events is not None:
         pending = pending[:max_events]
+    if len(pending) and store is None:
+        store = EventStore(events)
 
-    col = {c: out.columns.get_loc(c) for c in ("src_id", "dst_id", "t", "orc", "radius", "computed_at_stage")}
+    col = {c: out.columns.get_loc(c) for c in ("event_id", "src_id", "dst_id", "t", "orc", "radius",
+                                               "computed_at_stage", *ROW_COLUMNS)}
     sizes, kept_sizes, t_sub, t_orc = [], [], [], []
-    n_capped = n_lossy = 0
+    n_capped = n_lossy = n_errors = 0
+    done = []
     t_start = time.perf_counter()
-    for i in pending:
-        u, v, t = out.iat[i, col["src_id"]], out.iat[i, col["dst_id"]], int(out.iat[i, col["t"]])
-        t0 = time.perf_counter()
-        G = store.subgraph_at(u, v, t, radius)
-        if not G.has_edge(u, v):
-            G.add_edge(u, v, t=t)
-        H, info = cap_subgraph(G, u, v, edge_cap, prune=prune)
-        t1 = time.perf_counter()
-        val = orc_fn(H, [(u, v)], **orc_knobs)[(u, v)]
-        t2 = time.perf_counter()
+
+    def call(graphs):
+        """One ORC call for a list of (H, u, v); returns values in order. Single graph: no relabelling."""
+        if len(graphs) == 1:
+            H, u, v = graphs[0]
+            J, scored = H, [(u, v)]
+        else:
+            J = nx.DiGraph()
+            scored = []
+            for k, (H, u, v) in enumerate(graphs):
+                J.add_nodes_from((k, n) for n in H.nodes)
+                J.add_edges_from(((k, a), (k, b), d) for a, b, d in H.edges(data=True))
+                scored.append(((k, u), (k, v)))
+        if worker is not None:
+            got = worker.compute(list(J.nodes), [(a, b, d.get("t")) for a, b, d in J.edges(data=True)], scored)
+        else:
+            got = orc_fn(J, scored, **orc_knobs)
+        return [float(got[e]) for e in scored]
+
+    def record(i, H_info, val, err):
+        nonlocal n_errors
+        info, in_deg = H_info
         out.iat[i, col["orc"]] = float(val)
         out.iat[i, col["radius"]] = float(radius)
         out.iat[i, col["computed_at_stage"]] = stage
-        sizes.append(info["n_edges"])
-        kept_sizes.append(info["n_kept"])
-        n_capped += info["capped"]
-        n_lossy += info["lossy"]
-        t_sub.append(t1 - t0)
-        t_orc.append(t2 - t1)
+        out.iat[i, col["orc_subgraph_edges"]] = float(info["n_edges"])
+        out.iat[i, col["orc_capped"]] = bool(info["capped"])
+        out.iat[i, col["orc_lossy"]] = bool(info["lossy"])
+        out.iat[i, col["orc_src_in_deg"]] = float(in_deg)
+        out.iat[i, col["orc_attempted"]] = True
+        out.iat[i, col["orc_error"]] = err
+        n_errors += bool(err)
+        done.append(i)
+
+    for lo in range(0, len(pending), batch):
+        group = pending[lo:lo + batch]
+        built = []
+        t0 = time.perf_counter()
+        for i in group:
+            u, v, t = out.iat[i, col["src_id"]], out.iat[i, col["dst_id"]], int(out.iat[i, col["t"]])
+            G = store.subgraph_at(u, v, t, radius)
+            if not G.has_edge(u, v):
+                G.add_edge(u, v, t=t)
+            in_deg = len(set(G.predecessors(u)) - {u})
+            H, info = cap_subgraph(G, u, v, edge_cap, prune=prune)
+            built.append((i, H, u, v, info, in_deg))
+            sizes.append(info["n_edges"])
+            kept_sizes.append(info["n_kept"])
+            n_capped += info["capped"]
+            n_lossy += info["lossy"]
+        t1 = time.perf_counter()
+        ids = [int(out.iat[i, col["event_id"]]) for i, *_ in built]
+        try:
+            if progress is not None:
+                progress(ids)
+            vals = call([(H, u, v) for _, H, u, v, _, _ in built])
+            for (i, _, _, _, info, in_deg), val in zip(built, vals):
+                record(i, (info, in_deg), val, "")
+        except OrcWorkerDied as exc:
+            exc.partial_frame = out
+            raise
+        except Exception:
+            for i, H, u, v, info, in_deg in built:
+                try:
+                    if progress is not None:
+                        progress([int(out.iat[i, col["event_id"]])])
+                    val, err = call([(H, u, v)])[0], ""
+                except OrcWorkerDied as exc:
+                    exc.partial_frame = out
+                    raise
+                except Exception as exc:  # a row error: recorded, the run moves on
+                    val, err = float("nan"), f"{type(exc).__name__}: {exc}"[:2000]
+                record(i, (info, in_deg), val, err)
+        t2 = time.perf_counter()
+        t_sub.extend([(t1 - t0) / len(built)] * len(built))
+        t_orc.extend([(t2 - t1) / len(built)] * len(built))
 
     def mean(x):
         return float(np.mean(x)) if x else float("nan")
 
+    rows_frame = out.iloc[done][["event_id", *ROW_COLUMNS]].reset_index(drop=True)
     stats = {
         "n_escalated": int(esc.sum()),
         "n_pending": int(n_pending),
-        "n_computed": len(sizes),
+        "n_computed": len(done),
         "n_self_loops": int((esc & loop).sum()),
+        "n_skipped_self_loops": n_skipped_loops,
+        "n_errors": int(n_errors),
+        "rows": rows_frame,
         "mean_subgraph_edges": mean(sizes),
         "p95_subgraph_edges": float(np.percentile(sizes, 95)) if sizes else float("nan"),
         "max_subgraph_edges": int(max(sizes)) if sizes else 0,

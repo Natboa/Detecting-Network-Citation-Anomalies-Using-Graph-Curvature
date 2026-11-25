@@ -342,3 +342,187 @@ def test_real_orc_reduces_to_reference_overlap_when_source_is_uncited():
         orc = dict(zip(out["event_id"], out["orc"]))
         assert orc[5] == pytest.approx(-(1 - alpha) * (1 - 3 / 4), abs=1e-9)  # u also cites w1, w2, w4
         assert orc[9] == pytest.approx(0.0, abs=1e-9)  # w4 cites nothing
+
+
+# ------------------------------------------------- S4.3 Task 1: attempts, errors, batches, worker
+
+from citecurv.curvature import orc as orc_mod  # noqa: E402  (names added for S4.3 are read through the module)
+import orc_fakes  # noqa: E402
+
+ROW_COLUMNS = ["orc_subgraph_edges", "orc_capped", "orc_lossy", "orc_src_in_deg", "orc_attempted", "orc_error"]
+
+# u1 -> v at t=10 and u2 -> v at t=20 share v; u1 is cited by x at t=15, between them. A radius-2 subgraph of the
+# t=20 event holds x -> u1 (t=15); the t=10 event's must not, so a batch that merges the two leaks the future.
+OVERLAP = make_events([
+    (1, "v", "r1", 5), (2, "v", "r2", 5), (3, "u1", "v", 10), (4, "u1", "w", 10), (5, "x", "u1", 15),
+    (6, "u2", "v", 20), (7, "u2", "r1", 20), (8, "y", "u2", 25), (9, "z", "v", 30), (10, "z", "x", 30),
+])
+
+
+def pos(curv, event_ids):
+    ids = curv["event_id"].to_numpy()
+    return [int(np.flatnonzero(ids == e)[0]) for e in event_ids]
+
+
+def test_escalate_records_per_row_attempts():
+    curv = flagged(forman_screen(HAND), [9, 10])
+    out, stats = escalate(HAND, curv, EventStore(HAND), radius=2, edge_cap=3, orc_fn=FakeORC())
+    for c in ROW_COLUMNS:
+        assert c in out.columns
+    rows = stats["rows"].set_index("event_id")
+    assert sorted(rows.index) == [9, 10]
+    assert rows["orc_attempted"].all() and (rows["orc_error"] == "").all()
+    assert rows["orc_capped"].all() and (rows["orc_subgraph_edges"] > 3).all()
+    assert (rows["orc_src_in_deg"] >= 0).all()
+    rest = out[~out["escalated"]]
+    assert not rest["orc_attempted"].any()
+    assert stats["n_errors"] == 0
+
+
+def test_escalate_skips_attempted_rows_by_default():
+    curv = flagged(forman_screen(HAND), [5, 9])
+    out, stats = escalate(HAND, curv, EventStore(HAND), radius=1, orc_fn=orc_fakes.nan_fake)
+    assert out.loc[out["escalated"], "orc"].isna().all() and out.loc[out["escalated"], "orc_attempted"].all()
+    assert (out.loc[out["escalated"], "radius"] == 1).all()
+    fake = FakeORC()
+    out2, stats2 = escalate(HAND, out, EventStore(HAND), radius=1, orc_fn=fake)
+    assert fake.calls == [] and stats2["n_computed"] == 0
+
+
+def test_escalate_records_a_failing_row_and_moves_on():
+    def fails_on_ad(G, edges, **knobs):
+        if ("a", "d") in edges:
+            raise RuntimeError("boom on a-d")
+        return {tuple(e): -0.25 for e in edges}
+
+    curv = flagged(forman_screen(HAND), [5, 9, 10])
+    out, stats = escalate(HAND, curv, EventStore(HAND), radius=1, orc_fn=fails_on_ad)
+    by = out.set_index("event_id")
+    assert math.isnan(by.loc[5, "orc"]) and "boom on a-d" in by.loc[5, "orc_error"]
+    assert by.loc[5, "orc_attempted"] and by.loc[5, "radius"] == 1 and by.loc[5, "computed_at_stage"] == "escalate"
+    assert by.loc[9, "orc"] == -0.25 and by.loc[10, "orc"] == -0.25
+    assert stats["n_errors"] == 1
+
+
+def test_batched_escalate_equals_per_event():
+    curv = flagged(forman_screen(OVERLAP), [3, 4, 6, 7, 9])
+    seen = []
+
+    def recording(G, edges, **knobs):
+        seen.append((G.copy(), list(edges)))
+        return orc_fakes.component_fake(G, edges)
+
+    one, _ = escalate(OVERLAP, curv, EventStore(OVERLAP), radius=2, orc_fn=orc_fakes.component_fake,
+                      shortest_path="pairwise")
+    four, _ = escalate(OVERLAP, curv, EventStore(OVERLAP), radius=2, orc_fn=recording, batch=4,
+                       shortest_path="pairwise")
+    pd.testing.assert_series_equal(one["orc"], four["orc"])
+    assert [len(edges) for _, edges in seen] == [4, 1]  # ceil(5 / 4) calls; a lone graph is not relabelled
+    for G, edges in seen:
+        und = G.to_undirected(as_view=True)
+        for a, b in edges:
+            if len(edges) > 1:
+                assert isinstance(a, tuple) and a[0] == b[0]
+            t_k = G.edges[a, b]["t"]
+            comp = nx.node_connected_component(und, a)
+            assert all(d["t"] <= t_k for _, _, d in G.subgraph(comp).edges(data=True))
+    # the leak this test exists for: no component of the t=10 scored edge holds x -> u1 (t=15)
+    first_t10 = [G for G, edges in seen if any(G.edges[e]["t"] == 10 for e in edges)]
+    assert first_t10
+
+
+def test_batched_escalate_needs_pairwise_paths():
+    curv = flagged(forman_screen(OVERLAP), [3, 6])
+    with pytest.raises(ValueError, match="pairwise"):
+        escalate(OVERLAP, curv, EventStore(OVERLAP), radius=2, orc_fn=orc_fakes.component_fake, batch=2)
+    escalate(OVERLAP, curv, EventStore(OVERLAP), radius=2, orc_fn=orc_fakes.component_fake, batch=2,
+             shortest_path="pairwise")
+
+
+def test_explicit_rows_keep_their_order_and_skip_self_loops():
+    curv = flagged(forman_screen(HAND), [5, 9, 11])
+    fake = FakeORC()
+    out, stats = escalate(HAND, curv, EventStore(HAND), radius=1, orc_fn=fake, rows=pos(curv, [9, 11, 5]))
+    assert [c[1] for c in fake.calls] == [[("e", "d")], [("a", "d")]]
+    assert stats["n_skipped_self_loops"] == 1 and stats["n_computed"] == 2
+
+
+def test_orc_worker_returns_what_the_function_returns():
+    curv = flagged(forman_screen(OVERLAP), [3, 4, 6, 7, 9])
+    inproc, _ = escalate(OVERLAP, curv, EventStore(OVERLAP), radius=2, orc_fn=orc_fakes.component_fake,
+                         batch=2, shortest_path="pairwise")
+    w = orc_mod.OrcWorker("orc_fakes:component_fake", shortest_path="pairwise")
+    try:
+        viaw, _ = escalate(OVERLAP, curv, EventStore(OVERLAP), radius=2, worker=w, batch=2,
+                           shortest_path="pairwise")
+    finally:
+        w.close()
+    pd.testing.assert_series_equal(inproc["orc"], viaw["orc"])
+
+
+def test_orc_worker_knobs_must_match():
+    curv = flagged(forman_screen(OVERLAP), [3])
+    w = orc_mod.OrcWorker("orc_fakes:component_fake", shortest_path="pairwise", alpha=0.5)
+    try:
+        with pytest.raises(ValueError, match="knobs"):
+            escalate(OVERLAP, curv, EventStore(OVERLAP), radius=2, worker=w, shortest_path="pairwise", alpha=0.3)
+    finally:
+        w.close()
+
+
+def test_orc_worker_can_host_a_function_that_starts_a_child():
+    curv = flagged(forman_screen(OVERLAP), [3, 6])
+    w = orc_mod.OrcWorker("orc_fakes:child_starting_fake")
+    try:
+        out, stats = escalate(OVERLAP, curv, EventStore(OVERLAP), radius=2, worker=w)
+    finally:
+        w.close()
+    assert out.loc[out["escalated"], "orc"].notna().all() and stats["n_errors"] == 0
+
+
+def test_dead_worker_leaves_rows_pending():
+    curv = flagged(forman_screen(OVERLAP), [3, 6])
+    w = orc_mod.OrcWorker("orc_fakes:suicide_fake")
+    try:
+        with pytest.raises(orc_mod.OrcWorkerDied) as info:
+            escalate(OVERLAP, curv, EventStore(OVERLAP), radius=2, worker=w)
+    finally:
+        w.close()
+    assert not info.value.partial_frame["orc_attempted"].any()
+    assert curv["orc"].isna().all()
+
+
+def test_worker_error_inside_orc_fn_is_a_row_error():
+    curv = flagged(forman_screen(OVERLAP), [3, 6])
+    w = orc_mod.OrcWorker("orc_fakes:raising_fake")
+    try:
+        out, stats = escalate(OVERLAP, curv, EventStore(OVERLAP), radius=2, worker=w)
+    finally:
+        w.close()
+    assert stats["n_errors"] == 2 and out.loc[out["escalated"], "orc_attempted"].all()
+    assert out.loc[out["escalated"], "orc_error"].str.contains("fake failure").all()
+
+
+def test_batched_escalate_equals_per_event_with_the_library():
+    pytest.importorskip("GraphRicciCurvature")
+    extra = random_stream(seed=2, n_papers=25, refs=3)
+    extra = make_events([(100 + e, s, d, t + 40) for e, s, d, t in extra.itertuples(index=False)])
+    ev = pd.concat([OVERLAP, extra], ignore_index=True)
+    curv = flagged(forman_screen(ev), ev["event_id"].iloc[::2])
+    knobs = {"method": "OTDSinkhornMix", "shortest_path": "pairwise"}
+    one, _ = escalate(ev, curv, EventStore(ev), radius=1, prune=True, **knobs)
+    ten, _ = escalate(ev, curv, EventStore(ev), radius=1, prune=True, batch=10, **knobs)
+    np.testing.assert_allclose(one["orc"].to_numpy(), ten["orc"].to_numpy(), atol=1e-12, equal_nan=True)
+
+
+def test_orc_worker_equals_in_process_with_the_library():
+    pytest.importorskip("GraphRicciCurvature")
+    curv = flagged(forman_screen(OVERLAP), [3, 4, 6, 7, 9])
+    knobs = {"method": "OTDSinkhornMix", "shortest_path": "pairwise"}
+    inproc, _ = escalate(OVERLAP, curv, EventStore(OVERLAP), radius=2, prune=True, batch=2, **knobs)
+    w = orc_mod.OrcWorker("citecurv.curvature.orc:orc_directed", **knobs)
+    try:
+        viaw, _ = escalate(OVERLAP, curv, EventStore(OVERLAP), radius=2, prune=True, batch=2, worker=w, **knobs)
+    finally:
+        w.close()
+    np.testing.assert_allclose(inproc["orc"].to_numpy(), viaw["orc"].to_numpy(), atol=1e-12, equal_nan=True)
