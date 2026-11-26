@@ -23,6 +23,12 @@ Components (raw values; higher = more anomalous; the combiner z-normalises them)
             rows only.
 - cold_start  dst has fewer than k events with ts < t.
 
+Variant "orc_dir" (option A, plan docs/superpowers/plans/2026-11-26-orc-dir-closed-form.md; the matrix cells
+full / no_temporal / full_learned use it from 2026-11-26): s_geom = -z(orc_dir) against the same reference cell
+(one-sided, no absolute value), orc_dir being the closed-form directed ORC of the curvature stage's mode "closed";
+s_curvdyn = (predicted - orc_dir) / rmse_train with the ridge target orc_dir (no asinh, signed). The other
+variants keep the definitions above (the "plan formulation").
+
 Reference cell = (field of src, calendar year of t), expanding window over
 strictly earlier events (ts < t). A level is usable with >= max(min_cell, 2)
 earlier valid rows and sd > 0; otherwise fall back to (field), then (global).
@@ -51,7 +57,7 @@ import pandas as pd
 
 COMPONENTS = ("s_embed", "s_geom", "s_temp", "s_curvdyn")
 COMPONENT_COLUMNS = ["event_id", "src_id", "dst_id", "t", *COMPONENTS, "cold_start"]
-VARIANTS = ("full", "no_curvature", "forman_only", "ollivier_only", "no_temporal")
+VARIANTS = ("full", "no_curvature", "forman_only", "ollivier_only", "no_temporal", "orc_dir")
 EMBED_MODES = ("auto", "tgn", "static_cosine")
 TEMPORAL_STATS = ("rate_ratio", "poisson_tail")
 _TAIL_FLOOR = 1e-300  # P(N >= n) floor before -ln (caps the poisson_tail surprise at about 690.8)
@@ -213,6 +219,7 @@ def _canonical_events(events, works, curvature, field_col):
 
     n = len(ev)
     forman, orc, esc = np.full(n, np.nan), np.full(n, np.nan), np.zeros(n, dtype=bool)
+    orc_dir, cited_src = np.full(n, np.nan), np.zeros(n, dtype=bool)
     if curvature is not None and len(curvature):
         cv = curvature
         if not cv["event_id"].is_unique:
@@ -234,7 +241,12 @@ def _canonical_events(events, works, curvature, field_col):
             esc[has] = cv["escalated"].fillna(False).to_numpy(dtype=bool)[take]
         else:
             esc = np.isfinite(orc)
+        if "orc_dir" in cv.columns:  # closed mode of the curvature stage (option A)
+            orc_dir[has] = cv["orc_dir"].to_numpy(dtype=float)[take]
+        if "citing_cited_at_t" in cv.columns:
+            cited_src[has] = cv["citing_cited_at_t"].fillna(False).to_numpy(dtype=bool)[take]
     ev["forman"], ev["orc"], ev["escalated"] = forman, orc, esc
+    ev["orc_dir"], ev["citing_cited_at_t"] = orc_dir, cited_src
     return ev
 
 
@@ -468,7 +480,11 @@ def _features(a, b, center, basis):
 
 def _curv_target(ev, target):
     """y = asinh(curvature) and its validity. target "orc" reads ORC on escalated
-    rows only; "forman" reads the screen value."""
+    rows only; "forman" reads the screen value; "orc_dir" reads the closed-form
+    directed ORC as it is (bounded in [-(1 - alpha), 0], no asinh)."""
+    if target == "orc_dir":
+        y = ev["orc_dir"].to_numpy(dtype=float)
+        return y, np.isfinite(y)
     if target == "orc":
         raw = np.where(ev["escalated"].to_numpy(), ev["orc"].to_numpy(), np.nan)
     else:
@@ -569,6 +585,9 @@ def _prepare(events, works, curvature, *, embeddings, tgn_scores, tgn_embeddings
         raise ValueError("mode='tgn' needs tgn_scores")
     if mode == "static_cosine" and embeddings is None:
         raise ValueError("mode='static_cosine' needs embeddings")
+    if variant == "orc_dir" and (curvature is None or "orc_dir" not in curvature.columns):
+        raise ValueError("variant 'orc_dir' needs an orc_dir column in the curvature frame (curvature stage mode "
+                         "'closed', pipeline.closed_orc_stage)")
     notes = []
     ev = _canonical_events(events, works, curvature, field_col)
     n = len(ev)
@@ -602,7 +621,7 @@ def _prepare(events, works, curvature, *, embeddings, tgn_scores, tgn_embeddings
     endpoints, model = None, None
     if "s_curvdyn" not in disabled and n and (tgn_embeddings is not None or emb is not None):
         endpoints = _Endpoints(ev, emb, tgn_embeddings)
-        target = "orc" if variant == "ollivier_only" else "forman"
+        target = {"ollivier_only": "orc", "orc_dir": "orc_dir"}.get(variant, "forman")
         if curvdyn_model is not None:
             if (curvdyn_model.source, curvdyn_model.target) != (endpoints.source, target):
                 raise ValueError(
@@ -628,9 +647,10 @@ def _prepare(events, works, curvature, *, embeddings, tgn_scores, tgn_embeddings
 
 
 def _uses(variant):
-    """(reads forman, reads orc) for the variant (ablation semantics, note section 7)."""
+    """(reads forman, reads orc) for the variant (ablation semantics, note section 7). "orc_dir" reads neither: its
+    s_geom comes from the orc_dir column alone (option A, plan 2026-11-26)."""
     return {"full": (True, True), "no_temporal": (True, True), "forman_only": (True, False),
-            "ollivier_only": (False, True), "no_curvature": (False, False)}[variant]
+            "ollivier_only": (False, True), "no_curvature": (False, False), "orc_dir": (False, False)}[variant]
 
 
 # ----------------------------------------------------------------- vectorised path
@@ -700,7 +720,14 @@ def score_events(events, works, curvature, *, embeddings=None, tgn_scores=None, 
     ref_o = _cell_z(frames, t, orc, esc & np.isfinite(orc), min_cell) if reads_o else None
     zf = ref_f["z"] if ref_f else nan
     zo = np.where(esc, ref_o["z"], np.nan) if ref_o else nan
-    s_geom = np.fmax(np.abs(zf), np.abs(zo))
+    od = ev["orc_dir"].to_numpy(dtype=float)
+    z_od = nan
+    if P.variant == "orc_dir":  # one-sided: lower directed curvature than the cell = more anomalous
+        ref_f = _cell_z(frames, t, od, np.isfinite(od), min_cell)  # reported under the geom_* reference columns
+        z_od = ref_f["z"]
+        s_geom = -z_od
+    else:
+        s_geom = np.fmax(np.abs(zf), np.abs(zo))
 
     # s_curvdyn
     s_curv, obs, pred = nan.copy(), nan.copy(), nan.copy()
@@ -711,7 +738,10 @@ def score_events(events, works, curvature, *, embeddings=None, tgn_scores=None, 
         for s in range(0, len(rows), _CHUNK):
             rr = rows[s:s + _CHUNK]
             pred[rr] = P.model.predict(*P.endpoints.vectors(rr))
-        s_curv = np.abs(obs - pred) / P.model.rmse
+        if P.model.target == "orc_dir":  # signed: observed curvature below what the endpoints predict
+            s_curv = (pred - obs) / P.model.rmse
+        else:
+            s_curv = np.abs(obs - pred) / P.model.rmse
 
     out = pd.DataFrame({
         "event_id": ev["event_id"].to_numpy(dtype=np.int64),
@@ -737,6 +767,9 @@ def score_events(events, works, curvature, *, embeddings=None, tgn_scores=None, 
         trace["escalated"] = esc
         trace["z_forman"] = zf
         trace["z_orc"] = zo
+        trace["orc_dir"] = od
+        trace["z_orc_dir"] = z_od
+        trace["citing_cited_at_t"] = ev["citing_cited_at_t"].to_numpy()
         for key in ("temp_x", "n_recent", "n_before", "exposure_days", "n_prior_dst"):
             trace[key] = P.temporal[key]
         for prefix, ref in zip(_REF_STATS, (ref_embed, ref_f, ref_o, ref_temp)):
@@ -766,8 +799,8 @@ def fit_curvdyn_model(events, curvature, *, train_mask, embeddings=None, tgn_emb
     rows exceed max_fit_rows and the PCA subsample. Returns None when no train
     row has both a finite target and endpoint vectors.
     """
-    if target not in ("forman", "orc"):
-        raise ValueError("target must be 'forman' or 'orc'")
+    if target not in ("forman", "orc", "orc_dir"):
+        raise ValueError("target must be 'forman', 'orc' or 'orc_dir'")
     if embeddings is None and tgn_embeddings is None:
         raise ValueError("need embeddings or tgn_embeddings")
     ev = _canonical_events(events, None, curvature, "field")
@@ -864,6 +897,9 @@ def build_context(events, works, curvature, *, embeddings=None, tgn_scores=None,
     if reads_o:
         o = ev["orc"].to_numpy()
         tables["orc"] = _prefix_tables(frames, t, o, ev["escalated"].to_numpy() & np.isfinite(o))
+    if P.variant == "orc_dir":
+        od = ev["orc_dir"].to_numpy(dtype=float)
+        tables["orc_dir"] = _prefix_tables(frames, t, od, np.isfinite(od))
     codes, uniq = pd.factorize(ev["dst_id"].to_numpy())
     order = np.lexsort((t, codes))
     starts = np.searchsorted(codes[order], np.arange(len(uniq) + 1), "left")
@@ -918,17 +954,26 @@ def score_event(event_id, ctx: ScoringContext) -> ScoreBreakdown:
     orc = float(ev["orc"].iat[i]) if reads_o else nan
     rf = _scalar_z(ctx.tables.get("geom"), keys, t, forman, prm["min_cell"])
     ro = _scalar_z(ctx.tables.get("orc") if esc else None, keys, t, orc, prm["min_cell"])
-    s_geom = float(np.fmax(abs(rf["z"]), abs(ro["z"])))
+    od = float(ev["orc_dir"].iat[i])
+    z_od = nan
+    if P.variant == "orc_dir":  # one-sided, as score_events; the reference goes to the geom_* inputs
+        rf = _scalar_z(ctx.tables.get("orc_dir"), keys, t, od, prm["min_cell"])
+        z_od = rf["z"]
+        s_geom = -z_od
+    else:
+        s_geom = float(np.fmax(abs(rf["z"]), abs(ro["z"])))
 
     # s_curvdyn
     obs = pred = s_curv = nan
     if P.model is not None:
-        raw = (orc if esc else nan) if P.model.target == "orc" else float(ev["forman"].iat[i])
+        target = P.model.target
+        raw = (od if target == "orc_dir" else
+               (orc if esc else nan) if target == "orc" else float(ev["forman"].iat[i]))
         if np.isfinite(raw):
-            obs = float(np.arcsinh(raw))
+            obs = float(raw) if target == "orc_dir" else float(np.arcsinh(raw))
             if P.endpoints.valid[i]:
                 pred = float(P.model.predict(*P.endpoints.vectors(np.array([i])))[0])
-                s_curv = abs(obs - pred) / P.model.rmse
+                s_curv = ((pred - obs) if target == "orc_dir" else abs(obs - pred)) / P.model.rmse
     values = {"s_embed": s_embed, "s_geom": s_geom, "s_temp": rt["z"], "s_curvdyn": s_curv}
     for comp in P.disabled:
         values[comp] = nan
@@ -936,7 +981,9 @@ def score_event(event_id, ctx: ScoringContext) -> ScoreBreakdown:
     inputs = {"event_id": int(event_id), "src_id": src, "dst_id": dst, "t": t, "field": fld,
               "year": year, "variant": P.variant, "embed_mode": P.embed_mode, "k": prm["k"],
               "p_link": p_link, "cosine": cosine, "forman": forman, "orc": orc, "escalated": esc,
-              "z_forman": rf["z"], "z_orc": ro["z"], "temp_x": temp_x, "n_recent": n_recent,
+              "z_forman": rf["z"] if P.variant != "orc_dir" else nan, "z_orc": ro["z"],
+              "orc_dir": od, "z_orc_dir": z_od, "citing_cited_at_t": bool(ev["citing_cited_at_t"].iat[i]),
+              "temp_x": temp_x, "n_recent": n_recent,
               "n_before": n_before, "exposure_days": exposure, "n_prior_dst": n_prior,
               "curv_obs": obs, "curv_pred": pred,
               "curv_source": P.model.source if P.model else None,

@@ -55,11 +55,11 @@ def make_works(events, field_of=None, default="F"):
     return pd.DataFrame({"work_id": ids, "field": [field_of.get(i, default) for i in ids]})
 
 
-def make_curv(events, forman, orc=None, escalated=None):
+def make_curv(events, forman, orc=None, escalated=None, orc_dir=None):
     n = len(events)
     orc = np.full(n, np.nan) if orc is None else np.asarray(orc, dtype=float)
     esc = ~np.isnan(orc) if escalated is None else np.asarray(escalated, dtype=bool)
-    return pd.DataFrame(
+    out = pd.DataFrame(
         {
             "event_id": events["event_id"].to_numpy(),
             "src_id": events["src_id"].to_numpy(),
@@ -72,6 +72,10 @@ def make_curv(events, forman, orc=None, escalated=None):
             "computed_at_stage": "test",
         }
     )
+    if orc_dir is not None:  # the closed mode's columns (pipeline.closed_orc_stage)
+        out["orc_dir"] = np.asarray(orc_dir, dtype=float)
+        out["citing_cited_at_t"] = np.arange(n) % 5 == 0
+    return out
 
 
 def random_stream(n=300, n_nodes=40, seed=7, d=6, t_values=None):
@@ -91,7 +95,8 @@ def random_stream(n=300, n_nodes=40, seed=7, d=6, t_values=None):
     esc = rng.random(n) < 0.25
     orc = np.where(esc, rng.uniform(-1.0, 1.0, size=n), np.nan)
     orc[np.flatnonzero(esc)[:2]] = np.nan  # escalated but ORC failed
-    curv = make_curv(ev, forman, orc, esc)
+    orc_dir = np.where(rng.random(n) < 0.1, np.nan, -0.5 * rng.beta(2, 2, size=n))  # unknown lists: NaN
+    curv = make_curv(ev, forman, orc, esc, orc_dir=orc_dir)
     ids = np.array([f"n{i}" for i in range(n_nodes) if i not in (3, 11)])
     vecs = rng.normal(size=(len(ids), d)).astype(np.float32)
     p = rng.uniform(0.01, 0.99, size=n)
@@ -571,6 +576,7 @@ def test_matched_random_escalation_per_stratum_ignores_other_strata():
 
 @pytest.mark.parametrize("variant,temporal_stat", [("full", "rate_ratio"), ("forman_only", "rate_ratio"),
                                                    ("ollivier_only", "rate_ratio"), ("no_curvature", "rate_ratio"),
+                                                   ("orc_dir", "rate_ratio"),
                                                    ("full", "poisson_tail"), ("no_curvature", "poisson_tail")])
 @pytest.mark.parametrize("mode", ["static_cosine", "tgn"])
 def test_single_event_path_agrees_with_vectorised(variant, mode, temporal_stat):
@@ -717,3 +723,79 @@ def test_no_quadratic_blowup_on_a_larger_stream():
         out = score_events(ev, works, curv)
     assert time.perf_counter() - t0 < 20
     assert len(out) == n and out["s_temp"].notna().mean() > 0.99
+
+
+# ---------------------------------------------------------------- orc_dir (option A, plan 2026-11-26, Task 2)
+
+
+def _orc_dir_cell(scored):
+    rows = [("a1", "b", 10), ("a2", "b", 20), ("a3", "b", 30), ("a4", "b", 40), ("a5", "c", 50)]
+    ev = make_events(rows)
+    return ev, make_works(ev), make_curv(ev, [-1, -3, -5, -7, -9], orc_dir=[-0.1, -0.2, -0.3, -0.4, scored])
+
+
+def test_orc_dir_s_geom_is_one_sided():
+    ref = np.array([-0.1, -0.2, -0.3, -0.4])
+    low = score_events(*_orc_dir_cell(-0.45), variant="orc_dir", min_cell=4)["s_geom"].iloc[4]
+    high = score_events(*_orc_dir_cell(-0.05), variant="orc_dir", min_cell=4)["s_geom"].iloc[4]
+    assert low == pytest.approx(-(-0.45 - ref.mean()) / ref.std(ddof=1), abs=1e-12)
+    assert high == pytest.approx(-(-0.05 - ref.mean()) / ref.std(ddof=1), abs=1e-12)
+    assert low > 0 > high  # lower curvature scores higher; no absolute value
+
+
+def test_orc_dir_nan_stays_nan():
+    ev, works, curv, emb, tgn_scores, tgn_emb, train = random_stream(n=300)
+    out = score_events(ev, works, curv, tgn_scores=tgn_scores, tgn_embeddings=tgn_emb, train_mask=train,
+                       mode="tgn", variant="orc_dir", min_cell=5, pca_dim=4).set_index("event_id")
+    nan_ids = curv.loc[curv["orc_dir"].isna(), "event_id"]
+    assert len(nan_ids) > 0
+    assert out.loc[nan_ids, "s_geom"].isna().all() and out.loc[nan_ids, "s_curvdyn"].isna().all()
+
+
+def test_curvdyn_orc_dir_residual_is_signed():
+    ev, works, curv, emb, tgn_scores, tgn_emb, train = random_stream(n=300)
+    out = score_events(ev, works, curv, tgn_scores=tgn_scores, tgn_embeddings=tgn_emb, train_mask=train,
+                       mode="tgn", variant="orc_dir", min_cell=5, pca_dim=4, with_inputs=True)
+    od = curv.set_index("event_id").loc[out["event_id"], "orc_dir"].to_numpy()
+    obs, pred, s = out["in_curv_obs"].to_numpy(), out["in_curv_pred"].to_numpy(), out["s_curvdyn"].to_numpy()
+    ok = np.isfinite(s)
+    assert ok.sum() > 100
+    assert np.allclose(obs[ok], od[ok])  # raw orc_dir, no asinh
+    assert np.all(np.sign(s[ok]) == np.sign(pred[ok] - obs[ok]))
+    assert (s[ok] > 0).any() and (s[ok] < 0).any()
+
+
+def test_orc_dir_needs_the_column():
+    ev, works, curv = _cell_fixture(-4.0)  # a screen+orc frame without orc_dir
+    with pytest.raises(ValueError, match="needs an orc_dir column"):
+        score_events(ev, works, curv, variant="orc_dir", min_cell=4)
+
+
+def test_cold_rows_rank_by_minus_orc_dir():
+    from citecurv.pipeline import cold_start_scores
+
+    rows = [(f"r{i}", f"new{i}", 10 * (i + 1)) for i in range(8)] + [(f"x{i}", f"fresh{i}", 100) for i in range(3)]
+    ev = make_events(rows)
+    od = [-0.10, -0.15, -0.20, -0.25, -0.30, -0.35, -0.40, -0.45, -0.40, -0.20, -0.10]
+    comp = score_events(ev, make_works(ev), make_curv(ev, np.full(len(ev), -3.0), orc_dir=od),
+                        variant="orc_dir", min_cell=3)
+    assert comp["cold_start"].all()
+    split = np.where(comp["t"].to_numpy() < 100, "train", "test")
+    cold = comp["cold_start"].to_numpy()
+    total_cold, _ = cold_start_scores(comp, split, cold, ["s_geom"], {"s_geom": 1.0})
+    last = total_cold[-3:]  # the three test rows, orc_dir -0.40, -0.20, -0.10
+    assert last[0] > last[1] > last[2]
+
+
+def test_orc_dir_trace_and_breakdown():
+    ev, works, curv, emb, tgn_scores, tgn_emb, train = random_stream(n=120)
+    kw = dict(tgn_scores=tgn_scores, tgn_embeddings=tgn_emb, train_mask=train, mode="tgn", variant="orc_dir",
+              min_cell=5, pca_dim=4)
+    out = score_events(ev, works, curv, with_inputs=True, **kw)
+    for col in ("in_orc_dir", "in_z_orc_dir", "in_citing_cited_at_t"):
+        assert col in out.columns
+    ctx = build_context(ev, works, curv, **kw)
+    b = score_event(int(out["event_id"].iloc[-1]), ctx)
+    for key in ("orc_dir", "z_orc_dir", "citing_cited_at_t"):
+        assert key in b.inputs
+    assert b.inputs["curv_target"] == "orc_dir"

@@ -23,14 +23,19 @@ COMPONENT_TEXT = {
     },
     "s_geom": {
         "name": "Geometric anomaly",
-        "formula": "s_geom = |z_forman|, or max(|z_forman|, |z_orc|) when escalated",
+        "formula": ("orc_dir formulation (full, no_temporal, full_learned from 2026-11-26): s_geom = -z(orc_dir), "
+                    "orc_dir = -(1 - alpha)(1 - n_shared / n_refs_v). Plan formulation (forman_only, plan_full, "
+                    "runs before 2026-11-26): s_geom = |z_forman|, or max(|z_forman|, |z_orc|) when escalated"),
         "text": (
-            "z-score of the directed Forman screen F = 2 - in_deg_t(u) - out_deg_t(v) against an expanding "
-            "reference of earlier events (ts < t) in the citing paper's (field, year) cell, with fallback to the "
-            "field, then all events, when a cell has fewer than 30 values. Escalated events also get a z-score of "
-            "their Ollivier-Ricci curvature against earlier escalated events; s_geom is the larger absolute value "
-            "(D1, D2, D5). At event time the citing paper is usually uncited, so F mostly equals 2 minus the cited "
-            "paper's reference count (docs/curvature_formulation_study.md, Proposition 1)."
+            "orc_dir formulation: the directed Ollivier-Ricci curvature of the citation u -> v at t, computed by its "
+            "closed form from the share of v's references that u also cites (docs/curvature_formulation_study.md, "
+            "Proposition 2; exact when u has no citer at t, flagged otherwise), z-scored against earlier events "
+            "(ts < t) of the citing paper's (field, year) cell with fallback to the field, then all events. "
+            "One-sided: lower curvature than the cell (few shared references) scores higher; NaN when v's "
+            "reference list is unknown. Plan formulation: z-score of the directed Forman screen "
+            "F = 2 - in_deg_t(u) - out_deg_t(v) against the same kind of reference, escalated events also with "
+            "their ORC z-score, s_geom the larger absolute value (D1, D2, D5); at event time F mostly equals 2 "
+            "minus the cited paper's reference count (Proposition 1)."
         ),
     },
     "s_temp": {
@@ -45,13 +50,15 @@ COMPONENT_TEXT = {
     },
     "s_curvdyn": {
         "name": "Curvature dynamics",
-        "formula": "s_curvdyn = |asinh(F) - ridge(phi(z_u, z_v))| / RMSE_train",
+        "formula": ("orc_dir formulation: s_curvdyn = (ridge(phi(z_u, z_v)) - orc_dir) / RMSE_train. "
+                    "Plan formulation: s_curvdyn = |asinh(F) - ridge(phi(z_u, z_v))| / RMSE_train"),
         "text": (
-            "Residual of a ridge regression that predicts asinh(Forman screen) from the two endpoint vectors (TGN "
+            "Residual of a ridge regression that predicts the curvature from the two endpoint vectors (TGN "
             "embeddings at t, else SPECTER2), reduced by PCA to 32 dimensions each plus their product and cosine. "
-            "PCA, scaling, coefficients and RMSE are fitted on training rows only (D7). High when the papers' "
-            "representations do not predict the observed curvature; at event time that target is mostly "
-            "asinh(2 - the cited paper's reference count)."
+            "PCA, scaling, coefficients and RMSE are fitted on training rows only (D7). orc_dir formulation: the "
+            "target is orc_dir and the residual is signed, high when the observed curvature is lower than the "
+            "papers' representations predict. Plan formulation: the target is asinh(Forman screen), mostly "
+            "asinh(2 - the cited paper's reference count) at event time, and the residual is absolute."
         ),
     },
 }
