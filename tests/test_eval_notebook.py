@@ -15,13 +15,57 @@ NB = Path(__file__).resolve().parents[1] / "notebooks" / "50_eval.ipynb"
 REQUIRED = ["TGN_full_seed", "orc_job", "require_orc_memo=True", "load_orc_memo", "gate_shuffle_tgn", "split.yaml",
             "MAX_HOURS", "flush_and_unmount", "OPENBLAS_CORETYPE", "start_new_session=True", "killpg",
             "return_degrees=True", "aliases", "shuffle_components_record(", "orc_memo_sha256", "SMOKE_PEAK",
-            "redirect_stdout", "gates_repro_0", "drift_tol"]
+            "redirect_stdout", "gates_repro_0", "drift_tol",
+            # option A (plan 2026-11-26-orc-dir-closed-form, Task 4)
+            "reference_overlap(", "real_orcdir", "coupling=coupling()", "citing_uncited"]
 
 
 def code_cells():
     nb = json.loads(NB.read_text(encoding="utf-8"))
     return [("".join(c["source"]) if isinstance(c["source"], list) else c["source"])
             for c in nb["cells"] if c["cell_type"] == "code"]
+
+
+def indexed_code_cells():
+    """(notebook cell index, source) of every code cell; the index is the DOM `.cell` index Colab shows."""
+    nb = json.loads(NB.read_text(encoding="utf-8"))
+    return [(i, "".join(c["source"]) if isinstance(c["source"], list) else c["source"])
+            for i, c in enumerate(nb["cells"]) if c["cell_type"] == "code"]
+
+
+# folder paths only: "no_temporal_keep_temp" is also a run-group tag and a report alias, which stay
+OLD_ROOT = re.compile(r'matrix"\s*/\s*"(?:real|no_temporal_keep_temp)"|matrix/(?:real|no_temporal_keep_temp)(?!_orcdir)')
+
+
+def test_only_cell_4_names_the_matrix_roots_and_they_are_the_orcdir_ones():
+    """Option A: the rerun writes to real_orcdir / no_temporal_keep_temp_orcdir; no other cell names the C3 roots of
+    2026-11-25 in any form (Python paths, shell lines), so old and new records never mix."""
+    cells = dict(indexed_code_cells())
+    assert 'MATRIX_ROOT = EVAL / "matrix" / "real_orcdir"' in cells[4]
+    assert 'KEEP_ROOT = EVAL / "matrix" / "no_temporal_keep_temp_orcdir"' in cells[4]
+    for i, src in cells.items():
+        if i != 4:
+            assert not OLD_ROOT.search(src), f"cell {i} names an old matrix root: {OLD_ROOT.search(src).group(0)}"
+
+
+def test_matrix_calls_pass_the_coupling():
+    cells = dict(indexed_code_cells())
+    for i in (13, 14, 20):
+        src = cells[i]
+        calls = len(re.findall(r"\brun_matrix\(|\brun_pipeline\(", src))
+        assert calls and src.count("coupling=") >= calls, f"cell {i}: {calls} calls, {src.count('coupling=')} couplings"
+        assert "MEMO = memo(" not in src and "load_orc_memo(" not in src, f"cell {i} still loads an ORC memo"
+        assert "orc_memo=" not in src and "require_orc_memo" not in src, f"cell {i} still passes an ORC memo"
+
+
+def test_no_orc_job_outside_c1_and_c2():
+    """C4 is dropped (its cell raises first), C5a no longer runs the shuffled ORC job (option A computes no ORC)."""
+    call = re.compile(r"(?<!def )\brun_orc_job\(")
+    for i, src in indexed_code_cells():
+        if call.search(src) and i not in (9, 11):
+            first = next(line for line in src.splitlines() if line.strip() and not line.lstrip().startswith("#"))
+            assert first.startswith("raise "), f"cell {i} runs an ORC job"
+    assert not call.search(dict(indexed_code_cells())[18])
 
 
 def runnable(src: str) -> str:
