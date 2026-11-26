@@ -185,6 +185,10 @@ def resolve_config(cfg=None, *, variant="full", seed=0) -> dict:
             "learned_combiner": {"C": 1.0, "class_weight": "balanced", "random_state": 0, "max_iter": 1000,
                                  **(sc.get("learned_combiner") or {})},
             "components": {
+                # label of the curvature formulation behind s_geom / s_curvdyn (option A, 2026-11-26): it changes
+                # run_config_hash (resume never mixes formulations) and stays out of orc_settings_hash (ORC memos
+                # stay valid). Bump the string whenever the closed mode or the orc_dir component changes meaning.
+                "formulation": "orc_dir_closed_v1",
                 "embed_mode": pick(comp.get("embed_mode"), "auto"),
                 "window_days": int(pick(comp.get("window_days"), 90)),
                 "min_cell": int(pick(comp.get("min_cell"), 30)),
@@ -322,18 +326,19 @@ class OrcMemoMiss(ValueError):
     EventStore is built)."""
 
 
-def screen_stage(events, split, rcfg, *, context=None):
+def screen_stage(events, split, rcfg, *, context=None, return_degrees=False):
     """The Forman screen of a run: (curvature frame with `escalated` from the train-fitted thresholds, thresholds,
     stats). events: canonical events frame (order asserted); split aligned with it; context rows as in
     curvature_stage. The first half of curvature_stage, shared with precompute_matrix_orc so cells and the
-    precompute select from one code path."""
+    precompute select from one code path. return_degrees: also the columns in_deg_src and out_deg_dst."""
     from citecurv.curvature import screen as screen_mod
 
     cc = rcfg["curvature"]
     t0 = time.perf_counter()
     n_context = 0 if context is None else int(len(context))
     curv = screen_mod.forman_screen(events, count_duplicates=cc["screen_count_duplicates"],
-                                    unknown_without_refs=cc["screen_unknown_without_refs"], context=context)
+                                    unknown_without_refs=cc["screen_unknown_without_refs"], context=context,
+                                    return_degrees=return_degrees)
     if not np.array_equal(curv["event_id"].to_numpy(), events["event_id"].to_numpy()):
         raise RuntimeError("forman_screen returned rows out of canonical order (pass canonical events)")
     n_unknown = int(curv["forman"].isna().sum())  # cited work with no reference at t (screen_unknown_without_refs)
@@ -364,7 +369,7 @@ def select_escalation(curv, split, mode, seed, cap, *, unknown_without_refs) -> 
     out = curv.copy()
     eligible = (out["ref_known"].to_numpy(dtype=bool) if unknown_without_refs
                 else np.ones(len(out), dtype=bool))
-    if mode == "screen":
+    if mode in ("screen", "closed"):  # "closed" computes no ORC either (closed-form directed ORC, option A)
         out["escalated"] = False
     elif mode == "random+orc":
         ids = matched_random_escalation(out, seed=seed, strata=split, eligible=eligible)  # per split
@@ -385,8 +390,89 @@ def select_escalation(curv, split, mode, seed, cap, *, unknown_without_refs) -> 
     return out
 
 
+COUPLING_KEYS = ("event_id", "src_id", "dst_id", "t")
+
+
+def _checked_coupling(coupling, curv, out_deg_distinct):
+    """A passed reference_overlap frame, in the order of the canonical curvature frame, or ValueError when it does
+    not belong to these events and this context (other ids, endpoints or times, e.g. the shuffled stream; another
+    context, seen as a reference count that differs from the screen's distinct out-degree of the cited work)."""
+    need = list(COUPLING_KEYS) + ["n_refs_dst", "n_shared"]
+    missing = [c for c in need if c not in coupling.columns]
+    if missing:
+        raise ValueError(f"coupling frame lacks column(s) {missing}: pass curvature.overlap.reference_overlap(...) "
+                         "of these events")
+    if len(coupling) != len(curv) or not coupling["event_id"].is_unique:
+        raise ValueError(f"coupling frame has {len(coupling)} rows (ids unique: {coupling['event_id'].is_unique}), "
+                         f"the events {len(curv)}")
+    c = coupling.sort_values(["t", "event_id"], kind="mergesort").reset_index(drop=True)
+    for col in COUPLING_KEYS:
+        a, b = c[col].to_numpy(), curv[col].to_numpy()
+        same = (a.astype(np.int64) == b.astype(np.int64)) if col in ("event_id", "t") else (a.astype(str) == b.astype(str))
+        if not same.all():
+            raise ValueError(f"coupling frame does not match the events on column {col!r} "
+                             f"({int((~same).sum())} rows differ): computed on another stream?")
+    k = c["n_refs_dst"].to_numpy(dtype=float)
+    if not np.array_equal(k, np.asarray(out_deg_distinct, dtype=float)):
+        raise ValueError("coupling frame's n_refs_dst differs from the cited works' reference counts of this run "
+                         f"on {int((k != np.asarray(out_deg_distinct, dtype=float)).sum())} rows: another context?")
+    return c
+
+
+def closed_orc_stage(events, split, rcfg, *, seed=0, context=None, coupling=None):
+    """Curvature stage of mode "closed" (option A, plan 2026-11-26-orc-dir-closed-form): the Forman screen (for
+    `forman`, `ref_known` and the thresholds, which this mode writes but does not use) plus ORC_DIR_COLUMNS:
+
+    - n_refs_dst, n_shared: curvature.overlap.reference_overlap on the same graph state and context rows;
+    - orc_dir = -(1 - alpha) * (1 - n_shared / n_refs_dst) (variants.orc_directed_uncited; Proposition 2 of
+      docs/curvature_formulation_study.md), NaN where n_refs_dst == 0 (unknown reference list, G13) and on
+      self-loop rows; alpha = curvature.orc.alpha;
+    - citing_cited_at_t = in_deg_t(src) > 0: Proposition 2's premise fails and orc_dir is the closed form, not the
+      library value (Maor 2026-11-26: closed form for every row, the flag, an exact-only view in the report).
+
+    coupling: optional precomputed reference_overlap frame (checked by _checked_coupling); computed when None.
+    No ORC is computed: `escalated` False, `orc` NaN. Leak argument: every count reads rows with ts <= t without
+    the scored row (screen.py and overlap.py docstrings); thresholds are fitted on train rows."""
+    from citecurv.curvature import overlap as overlap_mod
+    from citecurv.curvature import screen as screen_mod
+    from citecurv.curvature.screen import CURVATURE_COLUMNS, ORC_DIR_COLUMNS
+    from citecurv.curvature.variants import orc_directed_uncited
+
+    cc = rcfg["curvature"]
+    curv, th, stats = screen_stage(events, split, rcfg, context=context, return_degrees=True)
+    stats["mode"] = "closed"
+    t1 = time.perf_counter()
+    in_deg = curv["in_deg_src"].to_numpy(dtype=float)
+    out_distinct = curv["out_deg_dst"].to_numpy(dtype=float)
+    if cc["screen_count_duplicates"]:  # the overlap counts distinct references; compare with distinct degrees
+        out_distinct = screen_mod.forman_screen(events, count_duplicates=False, unknown_without_refs=False,
+                                                context=context, return_degrees=True)["out_deg_dst"].to_numpy(float)
+    if coupling is None:
+        coupling = overlap_mod.reference_overlap(events, context=context)
+    c = _checked_coupling(coupling, curv, out_distinct)
+    k = c["n_refs_dst"].to_numpy(dtype=float)
+    s = c["n_shared"].to_numpy(dtype=float)
+    loop = curv["src_id"].to_numpy().astype(str) == curv["dst_id"].to_numpy().astype(str)
+    alpha = float((cc.get("orc") or {}).get("alpha", 0.5))
+    orc_dir = np.where((k > 0) & ~loop, orc_directed_uncited(s, k, alpha), np.nan)
+    curv = select_escalation(curv, split, "closed", seed, cc["orc_max_events"],
+                             unknown_without_refs=cc["screen_unknown_without_refs"])
+    stats.update(curv.attrs["selection"])
+    curv["n_refs_dst"] = c["n_refs_dst"].to_numpy(dtype=np.int64)
+    curv["n_shared"] = c["n_shared"].to_numpy(dtype=np.int64)
+    curv["orc_dir"] = orc_dir
+    curv["citing_cited_at_t"] = in_deg > 0
+    finite = np.isfinite(orc_dir)
+    n_flag = int((curv["citing_cited_at_t"].to_numpy() & finite).sum())
+    stats.update({"n_escalated": 0, "n_orc_memo_hits": 0, "n_orc_computed": 0, "n_orc_dir_known": int(finite.sum()),
+                  "n_citing_cited_at_t": n_flag,
+                  "share_citing_cited_at_t": n_flag / int(finite.sum()) if finite.any() else None,
+                  "orc_dir_s": time.perf_counter() - t1})
+    return curv[list(CURVATURE_COLUMNS) + list(ORC_DIR_COLUMNS)], th, stats
+
+
 def curvature_stage(events, split, rcfg, *, seed=0, orc_fn=None, store=None, orc_memo=None, context=None,
-                    require_orc_memo=False):
+                    require_orc_memo=False, coupling=None):
     """Curvature cache for the run's variant (None for no_curvature) plus thresholds and stage statistics.
 
     events: canonical events frame; split: array of 'train'/'val'/'test' aligned with it. context: optional
@@ -408,6 +494,8 @@ def curvature_stage(events, split, rcfg, *, seed=0, orc_fn=None, store=None, orc
     mode = rcfg["variant_spec"]["curvature"]
     if mode == "none":
         return None, None, {"mode": "none"}
+    if mode == "closed":  # closed-form directed ORC for every event; a passed coupling frame is used only here
+        return closed_orc_stage(events, split, rcfg, seed=seed, context=context, coupling=coupling)
     cc = rcfg["curvature"]
     curv, th, stats = screen_stage(events, split, rcfg, context=context)
     stats["mode"] = mode
@@ -581,7 +669,7 @@ def _file_record(path: Path) -> dict:
 def run_pipeline(events, works, *, authorships=None, embeddings=None, event_labels=None, cutoff=None,
                  variant="full", seed=0, cfg=None, tgn_scores=None, tgn_embeddings=None, orc_fn=None,
                  out_dir=None, orc_memo=None, store=None, tags=None, context=None,
-                 require_orc_memo=False) -> RunResult:
+                 require_orc_memo=False, coupling=None) -> RunResult:
     """One run of one ablation cell; see the module docstring for the stages and their order.
 
     events: CONTRACTS.md events frame (event_id, src_id, dst_id, t; extra columns ignored). works: work_id +
@@ -621,7 +709,7 @@ def run_pipeline(events, works, *, authorships=None, embeddings=None, event_labe
     t0 = time.perf_counter()
     curv, thresholds, curv_stats = curvature_stage(ev, split, rcfg, seed=seed, orc_fn=orc_fn, store=store,
                                                    orc_memo=orc_memo, context=context,
-                                                   require_orc_memo=require_orc_memo)
+                                                   require_orc_memo=require_orc_memo, coupling=coupling)
     timings["curvature_s"] = time.perf_counter() - t0
 
     # 3. components

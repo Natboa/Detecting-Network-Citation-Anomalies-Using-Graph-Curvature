@@ -56,6 +56,9 @@ CURVATURE_COLUMNS = [
     "event_id", "src_id", "dst_id", "t", "forman", "orc", "escalated", "radius",
     "computed_at_stage", "ref_known",
 ]
+# extra columns of the curvature stage's closed mode (pipeline.curvature_stage, option A of 2026-11-26): the reference
+# overlap counts, the closed-form directed ORC and the flag for rows where its premise (uncited citing work) fails
+ORC_DIR_COLUMNS = ["n_refs_dst", "n_shared", "orc_dir", "citing_cited_at_t"]
 EVENT_COLUMNS = ["event_id", "src_id", "dst_id", "t"]
 DAYS_EPOCH = np.datetime64("1970-01-01", "D")
 
