@@ -109,6 +109,8 @@ def test_install_cell_makes_the_running_kernel_import_the_package(tmp_path, monk
     src = runnable(cell[0]).replace('COMMIT = "SET-COMMIT"', 'COMMIT = "abc1234"')
     src = re.sub(r'^REPO_DIR = .*$', lambda m: f'REPO_DIR = {tmp_path.as_posix()!r}', src, flags=re.M)
     monkeypatch.setenv("CITECURV_GPU_STEP", "1")  # skip the ORC pins check: nothing is installed in this test
+    # the cell sets CITECURV_DYGLIB_ROOT under REPO_DIR (here tmp_path); record it so the monkeypatch undo restores it
+    monkeypatch.delenv("CITECURV_DYGLIB_ROOT", raising=False)
     saved_mods = {k: v for k, v in sys.modules.items() if k == "citecurv" or k.startswith("citecurv.")}
     saved_path = list(sys.path)
     stale = types.ModuleType("citecurv")
@@ -126,6 +128,24 @@ def test_install_cell_makes_the_running_kernel_import_the_package(tmp_path, monk
             del sys.modules[k]
         sys.modules.update(saved_mods)
         sys.path[:] = saved_path
+
+
+def test_install_cell_test_leaves_the_environment_alone(tmp_path):
+    """Colab C0 2026-11-26: the install-cell test exec'd the cell, which sets CITECURV_DYGLIB_ROOT to a path under the
+    test's tmp_path and never restored it, so tests/test_tgn_infer.py run later in the same process failed with
+    FileNotFoundError (DyGLib). After the test (and its monkeypatch undo) the variable is what it was before."""
+    import os
+
+    import pytest as _pytest
+
+    key = "CITECURV_DYGLIB_ROOT"
+    before = os.environ.get(key)
+    mp = _pytest.MonkeyPatch()
+    try:
+        test_install_cell_makes_the_running_kernel_import_the_package(tmp_path, mp)
+    finally:
+        mp.undo()
+    assert os.environ.get(key) == before
 
 
 def test_report_child_starts_after_the_inputs_are_freed():
