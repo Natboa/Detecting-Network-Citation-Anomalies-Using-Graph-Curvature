@@ -69,7 +69,7 @@ def stream(fx, monkeypatch):
     monkeypatch.setattr(screen_mod, "apply_screen", forced)
     split = split_events(ev, fx["meta"]["t_min"] - 1).to_numpy(dtype=object)
     rcfg = resolve_config({"pipeline": {"screen_percentile_low": 0.1, "screen_percentile_high": 0.9}},
-                          variant="full")
+                          variant="plan_full")  # the ORC path
     return ev, split, rcfg
 
 
@@ -188,7 +188,7 @@ def test_run_matrix_store_holds_the_context_rows(fx, tmp_path, monkeypatch):
 
     monkeypatch.setattr(ts_mod, "EventStore", Recording)
     monkeypatch.setattr(orc_mod, "EventStore", Recording)
-    A.run_matrix(["full"], [0], _data(fx), tmp_path, cfg=cfg_small(), orc_fn=FakeORC(), context=ctx)
+    A.run_matrix(["plan_full"], [0], _data(fx), tmp_path, cfg=cfg_small(), orc_fn=FakeORC(), context=ctx)
     assert sizes == [len(ev) + len(ctx)]
 
 

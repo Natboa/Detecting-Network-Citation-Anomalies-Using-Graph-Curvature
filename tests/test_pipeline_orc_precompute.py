@@ -43,7 +43,7 @@ from citecurv.pipeline import (
 from test_pipeline_integration import FakeORC
 
 V1 = ["event_id", "src_id", "dst_id", "t", "forman", "orc", "escalated", "radius", "computed_at_stage"]
-MODES = {"screen+orc": "full", "random+orc": "ollivier_only", "screen": "forman_only"}
+MODES = {"screen+orc": "plan_full", "random+orc": "ollivier_only", "screen": "forman_only"}
 GOLDEN = json.loads((__import__("pathlib").Path(__file__).parent / "fixtures" / "golden_escalation.json").read_text())
 
 
@@ -80,7 +80,7 @@ def cfg(**curv):
             "curvature": {"screen_unknown_without_refs": True, **curv}}
 
 
-def rc(c=None, variant="full", seed=0):
+def rc(c=None, variant="plan_full", seed=0):
     return resolve_config(c or cfg(), variant=variant, seed=seed)
 
 
@@ -176,7 +176,7 @@ def test_precompute_covers_every_cell(fx, tmp_path):
     memo = memo_for(out_path, ev, rcfg)
     cev = _canonical_events(ev)
     split = split_of(ev, cut(fx), rcfg)
-    for variant, seed in (("full", 0), ("ollivier_only", 0), ("ollivier_only", 1)):
+    for variant, seed in (("plan_full", 0), ("ollivier_only", 0), ("ollivier_only", 1)):
         r = rc(variant=variant, seed=seed)
         _, _, stats = curvature_stage(cev, split, r, seed=seed, orc_fn=raising, orc_memo=memo,
                                       require_orc_memo=True)
@@ -295,7 +295,7 @@ def test_precompute_refuses_other_settings(fx, tmp_path):
     out_path = tmp_path / "o.parquet"
     precompute_matrix_orc(ev, cut(fx), rc(), [0], out_path=out_path, orc_fn=Recorder())
     other = resolve_config({"pipeline": {"screen_percentile_low": 0.2, "screen_percentile_high": 0.9},
-                            "curvature": {"screen_unknown_without_refs": True}}, variant="full")
+                            "curvature": {"screen_unknown_without_refs": True}}, variant="plan_full")
     with pytest.raises(ValueError, match="settings"):
         precompute_matrix_orc(ev, cut(fx), other, [0], out_path=out_path, orc_fn=Recorder())
     with pytest.raises(ValueError, match="cutoff"):
@@ -313,7 +313,7 @@ def test_memo_loader_refuses_another_context(fx, tmp_path):
 
 def test_precompute_refuses_an_orc_cap(fx, tmp_path):
     capped = resolve_config({"pipeline": {"screen_percentile_low": 0.1, "screen_percentile_high": 0.9,
-                                          "orc_max_events": 5}}, variant="full")
+                                          "orc_max_events": 5}}, variant="plan_full")
     with pytest.raises(ValueError, match="orc_max_events"):
         precompute_matrix_orc(fx["events"], cut(fx), capped, [], out_path=tmp_path / "o.parquet", orc_fn=Recorder())
 
@@ -321,7 +321,7 @@ def test_precompute_refuses_an_orc_cap(fx, tmp_path):
 def test_known_checkpoint_from_other_settings_is_refused(fx, tmp_path):
     orig_path = tmp_path / "orig.parquet"
     other = resolve_config({"pipeline": {"screen_percentile_low": 0.2, "screen_percentile_high": 0.9},
-                            "curvature": {"screen_unknown_without_refs": True}}, variant="full")
+                            "curvature": {"screen_unknown_without_refs": True}}, variant="plan_full")
     precompute_matrix_orc(fx["events"], cut(fx), other, [], out_path=orig_path, orc_fn=Recorder())
     with pytest.raises(ValueError, match="known"):
         precompute_matrix_orc(swapped_stream(fx), cut(fx), rc(), [], out_path=tmp_path / "s.parquet",

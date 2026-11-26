@@ -27,11 +27,11 @@ from citecurv.scoring import components as C
 
 def test_variant_specs_are_consistent():
     assert set(A.ABLATION_VARIANTS) == {"full", "no_curvature", "forman_only", "ollivier_only", "no_temporal"}
-    assert set(A.VARIANTS) == set(A.ABLATION_VARIANTS) | set(A.EXTRA_CELLS)
+    assert set(A.VARIANTS) == set(A.ABLATION_VARIANTS) | set(A.EXTRA_CELLS) | set(A.RECORD_CELLS)
     for name, spec in A.VARIANTS.items():
         assert spec.name == name
         assert spec.component_variant in C.VARIANTS
-        assert spec.curvature in ("screen+orc", "screen", "random+orc", "none")
+        assert spec.curvature in ("screen+orc", "screen", "random+orc", "none", "closed")
         assert spec.combiner in ("calibrated", "learned")
     assert A.VARIANTS["no_temporal"].temporal_encoder is False
     assert A.VARIANTS["no_curvature"].curvature == "none"
@@ -162,10 +162,11 @@ def test_run_matrix_on_fixture_writes_runs_and_tables(tmp_path):
     t = A.tables(tmp_path)
     assert set(t["ablation"]["method"]) == set(A.VARIANTS)
     assert set(t["learned_vs_fixed"]["cell"]) == {"full_learned"}
-    # ORC is shared within a seed: full, no_temporal and full_learned reuse the screen-set values
-    n_screen = metrics[0]["curvature"]["n_orc_computed"]
-    full_like = [m for m in metrics if m["variant"] in ("no_temporal", "full_learned") and m["seed"] == 0]
-    assert all(m["curvature"]["n_orc_memo_hits"] == n_screen for m in full_like)
+    # option A (2026-11-26): the closed cells compute no ORC; plan_full (the old full) still does
+    closed = [m for m in metrics if m["variant"] in ("full", "no_temporal", "full_learned")]
+    assert all(m["curvature"]["mode"] == "closed" and m["curvature"]["n_orc_computed"] == 0 for m in closed)
+    assert all(m["curvature"]["n_orc_computed"] > 0 for m in metrics
+               if m["variant"] == "plan_full" and m["seed"] == 0)
     assert isinstance(pd.read_parquet(tmp_path / "runs" / "full_0" / "scores.parquet"), pd.DataFrame)
     assert load_config()  # default config untouched
 
@@ -286,3 +287,49 @@ def test_label_views_table_from_pipeline_runs_on_the_fixture(tmp_path):
     assert A.main(["--tables", str(tmp_path / "b.jsonl"), "--out", str(tmp_path / "tables2")]) == 0
     assert (out / "label_views.csv").read_bytes() == (tmp_path / "tables2" / "label_views.csv").read_bytes()
     assert (out / "tables.md").read_bytes() == (tmp_path / "tables2" / "tables.md").read_bytes()
+
+
+# ---------------------------------------------------------------- option A cells (plan 2026-11-26, Task 3)
+
+
+def _fixture_data():
+    fx = load_fixture()
+    return fx, {"events": fx["events"], "works": fx["works"], "embeddings": fx["embeddings"],
+                "event_labels": fx["event_labels"], "cutoff": 19180}
+
+
+def test_full_cell_runs_closed_mode_end_to_end(tmp_path):
+    from test_pipeline_integration import FakeORC, cfg_small
+
+    _, data = _fixture_data()
+    ms = A.run_matrix(["full", "forman_only", "no_curvature"], [0], data, tmp_path, cfg=cfg_small(), orc_fn=FakeORC())
+    by = {m["variant"]: m for m in ms}
+    assert by["full"]["curvature"]["mode"] == "closed" and by["full"]["curvature"]["n_orc_computed"] == 0
+    assert by["full"]["curvature"]["share_citing_cited_at_t"] is not None
+    assert by["forman_only"]["curvature"]["mode"] == "screen"
+    assert by["no_curvature"]["curvature"]["mode"] == "none"
+
+
+def test_coupling_passed_once_gives_same_scores(tmp_path, monkeypatch):
+    from citecurv.curvature import overlap as overlap_mod
+    from citecurv.pipeline import _canonical_events
+    from test_pipeline_integration import FakeORC, cfg_small
+
+    fx, data = _fixture_data()
+    A.run_matrix(["full"], [0], data, tmp_path / "a", cfg=cfg_small(), orc_fn=FakeORC())
+    coupling = overlap_mod.reference_overlap(_canonical_events(fx["events"]))
+    calls, real = [], overlap_mod.reference_overlap
+    monkeypatch.setattr(overlap_mod, "reference_overlap", lambda *a, **k: calls.append(1) or real(*a, **k))
+    m = A.run_matrix(["full"], [0], data, tmp_path / "b", cfg=cfg_small(), orc_fn=FakeORC(), coupling=coupling)
+    assert calls == [] and m[0]["curvature"]["mode"] == "closed"
+    pd.testing.assert_frame_equal(pd.read_parquet(tmp_path / "a" / "runs" / "full_0" / "scores.parquet"),
+                                  pd.read_parquet(tmp_path / "b" / "runs" / "full_0" / "scores.parquet"))
+
+
+def test_plan_full_keeps_the_old_path(tmp_path):
+    from test_pipeline_integration import FakeORC, cfg_small
+
+    _, data = _fixture_data()
+    m = A.run_matrix(["plan_full"], [0], data, tmp_path, cfg=cfg_small(), orc_fn=FakeORC())[0]
+    assert m["curvature"]["mode"] == "screen+orc" and m["curvature"]["n_orc_computed"] > 0
+    assert "plan_full" not in A.ABLATION_VARIANTS

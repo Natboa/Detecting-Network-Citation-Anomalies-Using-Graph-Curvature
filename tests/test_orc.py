@@ -556,7 +556,8 @@ def test_curvature_stage_reports_orc_errors():
 
     fx = load_fixture()
     split = split_events(fx["events"], fx["meta"]["t_min"] - 1).to_numpy(dtype=object)
-    rcfg = resolve_config({"pipeline": {"screen_percentile_low": 0.1, "screen_percentile_high": 0.9}})
+    rcfg = resolve_config({"pipeline": {"screen_percentile_low": 0.1, "screen_percentile_high": 0.9}},
+                          variant="plan_full")  # the ORC path (option A moved full to the closed mode)
     calls = {"n": 0, "bad": None}
 
     def third_fails(G, edges, **knobs):

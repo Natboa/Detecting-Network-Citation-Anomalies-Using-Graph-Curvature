@@ -6,7 +6,9 @@ fixes what the pipeline (``citecurv.pipeline.run_pipeline``) does for that cell:
 ==============  ==========================================================================================
 cell            meaning
 ==============  ==========================================================================================
-full            Forman screen + ORC escalation; all four components; calibrated fixed weights.
+full            closed-form directed ORC for every event (curvature mode "closed", component variant "orc_dir":
+                s_geom = -z(orc_dir), one-sided; option A, Maor 2026-11-26); all four components; calibrated
+                fixed weights. Until 2026-11-26 `full` was the plan formulation, now the cell `plan_full`.
 no_curvature    no curvature stage at all; s_geom and s_curvdyn off. Also serves as the "de-curvatured own
                 model" baseline (plan S4.4).
 forman_only     Forman screen only, no ORC escalation; s_geom = |z_F|, s_curvdyn target F.
@@ -15,6 +17,8 @@ ollivier_only   ORC on a seeded uniform random sample of the size of the screen'
 no_temporal     no TGN memory (s_embed static_cosine, static endpoint vectors for s_curvdyn) and, by default,
                 s_temp off as well (pipeline.no_temporal_drop_s_temp; decision D11, PROVISIONAL).
 full_learned    full components, LearnedCombiner (logistic head on the z-scores) instead of fixed weights.
+plan_full       record cell outside the matrix: the plan formulation (Forman screen + ORC escalation,
+                s_geom = max(|z_F|, |z_ORC|)), the `full` of the C3 run of 2026-11-25.
 ==============  ==========================================================================================
 
 Run artifacts: ``<out_dir>/runs/<variant>_<seed>/`` holds metrics.json, config.json (the resolved run
@@ -59,21 +63,27 @@ class VariantSpec:
 
 
 VARIANTS = {
-    "full": VariantSpec("full", "full", "screen+orc", True, False, "calibrated",
-                        "Forman screen + ORC escalation, all four components, calibrated weights"),
+    "full": VariantSpec("full", "orc_dir", "closed", True, False, "calibrated",
+                        "closed-form directed ORC for every event (one-sided s_geom), all four components, "
+                        "calibrated weights (option A, 2026-11-26)"),
     "no_curvature": VariantSpec("no_curvature", "no_curvature", "none", True, False, "calibrated",
                                 "no curvature anywhere: s_geom and s_curvdyn off, no screen, no ORC"),
     "forman_only": VariantSpec("forman_only", "forman_only", "screen", True, False, "calibrated",
                                "Forman screen only, no ORC escalation"),
     "ollivier_only": VariantSpec("ollivier_only", "ollivier_only", "random+orc", True, False, "calibrated",
                                  "ORC on a random sample at the screen's escalation rate; Forman never read"),
-    "no_temporal": VariantSpec("no_temporal", "no_temporal", "screen+orc", False, None, "calibrated",
-                               "no TGN memory (static embeddings); s_temp off unless the D11 flag says otherwise"),
-    "full_learned": VariantSpec("full_learned", "full", "screen+orc", True, False, "learned",
+    "no_temporal": VariantSpec("no_temporal", "orc_dir", "closed", False, None, "calibrated",
+                               "no TGN memory (static embeddings); s_temp off unless the D11 flag says otherwise; "
+                               "closed-form directed ORC"),
+    "full_learned": VariantSpec("full_learned", "orc_dir", "closed", True, False, "learned",
                                 "full components, logistic head instead of calibrated fixed weights (L13)"),
+    "plan_full": VariantSpec("plan_full", "full", "screen+orc", True, False, "calibrated",
+                             "the plan formulation of `full` before 2026-11-26: Forman screen + ORC escalation, "
+                             "s_geom = max(|z_F|, |z_ORC|); kept for tests and records, not in the matrix"),
 }
 ABLATION_VARIANTS = ("full", "no_curvature", "forman_only", "ollivier_only", "no_temporal")
 EXTRA_CELLS = ("full_learned",)
+RECORD_CELLS = ("plan_full",)  # runnable, outside the ablation table and the S4.3 matrix
 KINDS = ("model", "baseline", "control", "sanity", "report")  # "report": derived records (eval.report_s43)
 
 

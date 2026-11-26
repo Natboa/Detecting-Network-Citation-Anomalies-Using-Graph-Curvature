@@ -108,7 +108,7 @@ def test_scores_schema_is_exactly_the_contract(fx, tmp_path):
 
 
 def test_value_ranges_and_cold_start_rule(fx):
-    res = run(fx)
+    res = run(fx, variant="plan_full")  # the ORC path; closed-mode twin below
     s, ev = res.scores, fx["events"]
     k = res.config["scoring"]["cold_start_k"]
     prior = [int(((ev["dst_id"] == d) & (ev["t"] < t)).sum()) for d, t in zip(s["dst_id"], s["t"])]
@@ -135,6 +135,22 @@ def test_value_ranges_and_cold_start_rule(fx):
     assert res.thresholds["global"]["hi"] == pytest.approx(np.quantile(f, 0.9))
     assert set(res.split) == {"train", "val", "test"}
     assert (s.loc[res.split.to_numpy() == "test", "t"] >= fx["meta"]["t_min"]).all()
+
+
+def test_value_ranges_closed_mode(fx):
+    """The `full` cell after option A (2026-11-26): no ORC, orc_dir in [-(1 - alpha), 0] where known, signed
+    s_geom and s_curvdyn, the same cold-start rule and totals as the plan formulation."""
+    res = run(fx)
+    s, cur = res.scores, res.curvature
+    assert res.metrics["curvature"]["mode"] == "closed" and cur["orc"].isna().all() and not cur["escalated"].any()
+    od = cur["orc_dir"].dropna()
+    assert len(od) and od.between(-0.5, 0.0).all()
+    assert cur.loc[cur["n_refs_dst"] == 0, "orc_dir"].isna().all()
+    scored = ~s["cold_start"]
+    assert np.isfinite(s.loc[scored, "total"]).all() and s.loc[~scored, "total"].isna().all()
+    for c in ("s_geom", "s_curvdyn"):
+        v = s[c].dropna()
+        assert len(v) and (v < 0).any() and (v > 0).any(), c
 
 
 def test_metrics_use_the_shared_metric_path_on_scored_test_rows(fx):
@@ -254,10 +270,10 @@ def test_seeded_double_run_is_byte_identical(fx, tmp_path):
 
 def test_orc_memo_reuse_leaves_output_unchanged(fx):
     memo = {}
-    first = run(fx, orc_memo=memo)
+    first = run(fx, variant="plan_full", orc_memo=memo)  # the ORC path
     assert len(memo) == first.metrics["curvature"]["n_orc_computed"] > 0
     orc = FakeORC()
-    again = run(fx, orc_memo=memo, orc=orc)
+    again = run(fx, variant="plan_full", orc_memo=memo, orc=orc)
     assert orc.calls == 0
     assert frame_sha256(first.scores) == frame_sha256(again.scores)
     pd.testing.assert_frame_equal(first.curvature, again.curvature)
@@ -592,7 +608,8 @@ def test_context_rows_reach_the_screen_and_the_orc_subgraph_of_the_curvature_sta
     ctx = pd.DataFrame({"event_id": np.array([7, 8], dtype=np.int64), "src_id": ["v", "v"],
                         "dst_id": ["r1", "r2"], "t": np.array([4, 4], dtype=np.int64)})
     split = np.array(["train"] * 2)
-    rcfg = resolve_config({"curvature": {"screen_unknown_without_refs": True, "screen_inclusive_ties": True}})
+    rcfg = resolve_config({"curvature": {"screen_unknown_without_refs": True, "screen_inclusive_ties": True}},
+                          variant="plan_full")  # the ORC path
     seen = []
 
     def orc(G, edges, **knobs):
@@ -635,10 +652,13 @@ def test_run_pipeline_passes_context_rows_to_the_curvature_stage(fx):
 # ---------------------------------------------------------------- S4.3 Task 6: shuffle gate with drift, top-20 under G13
 
 def _shuffled_pair(fx):
-    base = run(fx)
+    # the gate is the subject here, not the formulation: plan_full ranks the fixture's two positives above
+    # chance, the closed-form cell lands at exactly 0.5 on them (2026-11-26)
+    base = run(fx, variant="plan_full")
     ev = shuffle_test_timestamps(fx["events"], fx["meta"]["t_min"] - 1, seed=1)
     shuf = run_pipeline(ev, fx["works"], embeddings=fx["embeddings"], event_labels=fx["event_labels"],
-                        cutoff=fx["meta"]["t_min"] - 1, variant="full", seed=0, cfg=cfg_small(), orc_fn=FakeORC())
+                        cutoff=fx["meta"]["t_min"] - 1, variant="plan_full", seed=0, cfg=cfg_small(),
+                        orc_fn=FakeORC())
     return base, shuf
 
 
