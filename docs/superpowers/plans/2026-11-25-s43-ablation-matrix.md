@@ -1,5 +1,7 @@
 # S4.3 Ablation Matrix (full run) Implementation Plan
 
+> **Amendment 2026-11-26 (option A, Maor's choice; plan `docs/superpowers/plans/2026-11-26-orc-dir-closed-form.md`).** The C3 run of 2026-11-25 under `full/eval/matrix/real` (and `no_temporal_keep_temp`) is kept as the record of the plan formulation. From now on the cells `full`, `no_temporal` and `full_learned` use the closed-form directed ORC (curvature mode "closed", component variant "orc_dir"), C3 reruns into `full/eval/matrix/real_orcdir` (`no_temporal_keep_temp_orcdir`), C4 is dropped (no ORC job, no `ollivier_only` cell), C5a runs no shuffled ORC job, and C5c and C6 read `real_orcdir`; C6 adds the exact-only view `citing_uncited`. The old `full` stays runnable as the record cell `plan_full`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Run the five ablation cells, the learned-combiner cell and a split-off `no_temporal` cell for seeds 0 to 4 on the full run, plus the timestamp-shuffle check with the TGN re-scored on the shuffled stream, and publish tables with paper-level uncertainty, the ledger's label views and the G7 counting controls.

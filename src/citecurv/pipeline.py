@@ -10,7 +10,10 @@
    GraphRicciCurvature). ``forman_only`` stops after the screen (no escalation). ``ollivier_only`` replaces
    the screen's escalation set by ``components.matched_random_escalation`` (same size, seeded, drawn inside
    each split with that split's screen count, so test-period events cannot change which train rows get
-   ORC), so no Forman value chooses which events get ORC.
+   ORC), so no Forman value chooses which events get ORC. Mode "closed" (the cells ``full``, ``no_temporal``,
+   ``full_learned`` from 2026-11-26, option A; ``closed_orc_stage``) runs the screen for its thresholds and
+   ``ref_known`` and computes the directed ORC of every event in closed form from the reference overlap
+   (``orc_dir``), with no escalation and no ORC library call; the old ``full`` is the record cell ``plan_full``.
 3. Components (``scoring.components.score_events``), variant semantics in docs/score_components.md section 8.
 4. ``ZStats`` fitted on train rows that are not cold-start, frozen, applied to every row.
 5. Weights. ``calibrate_weights`` on VAL rows when labels are given and val holds a positive that is not

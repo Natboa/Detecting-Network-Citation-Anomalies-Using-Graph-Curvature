@@ -474,3 +474,38 @@ paper outside the slice):
 
 Reference for this update: Kessler, M. M. (1963). Bibliographic coupling between scientific papers. *American
 Documentation, 14*(1), 10-25.
+
+## Update 2026-11-26: option A, the closed-form directed ORC in s_geom and s_curvdyn
+
+**Decision (Maor, 2026-11-26, in the session that ran C3):** "ok, go with option A", then "yes, keep the old row"
+and, on the premise rows, "1". This is the "better formula" that ledger G7 left open on 2026-11-03.
+
+**Why.** The C3 matrix of 2026-11-25 (plan formulation) put weight 1.0 on s_embed in every seed. Read from
+`full_0/metrics.json` on 2026-11-26, the standalone test AUROC on the 835,072 scored test rows was s_embed 0.5867,
+s_temp 0.4936, s_geom 0.4517, s_curvdyn 0.4475: the two curvature components ranked slightly below chance, and the
+non-negative weight search gave them zero. Proposition 1 above explains s_geom (the screen is a reference count
+at event time); the reference-overlap measure, which Proposition 2 ties to the directed ORC, had shown label signal
+on the full data (AUC 0.66 per citation, 0.77 per citing work, 2026-11-19, descriptive) and had never reached the
+score.
+
+**Fair held-out test (2026-11-26, PROGRESS.md):** adding z(low overlap) to z(s_embed) with a weight picked on
+validation (0.9 in every seed) raised test AP by 0.00077 [0.00056, 0.00101] and AUROC by 0.0625 [0.0429, 0.0805]
+(paper-cluster paired bootstrap over five seeds); low overlap alone gave 0.614 on rows with a known reference list,
+the citing work's reference count alone 0.590, low overlap within reference-count decile x year 0.596; on
+cold-start test rows 0.629 against 0.453. A publisher stratum was not computed.
+
+**Definitions (variant "orc_dir"; cells `full`, `no_temporal`, `full_learned`):**
+- curvature stage mode "closed": `orc_dir = -(1 - alpha) * (1 - n_shared / n_refs_dst)` for every event, alpha =
+  `curvature.orc.alpha` (0.5), NaN where the cited work has no known reference (G13) and on self-loops;
+- s_geom = `-z(orc_dir)` against the reference cell of section 2, one-sided (replaces D1/D2/D5 for these cells);
+- s_curvdyn = `(predicted - orc_dir) / rmse_train` with the ridge target `orc_dir`, signed (replaces D7 for them).
+
+**Premise rows.** The closed form equals the library ORC when the citing work has no citer at t. On the full run
+13.66% of the 7,043,051 events with a known reference list break that premise (test period 7.9%). Maor chose to keep
+the closed form for every row, flag those rows (`citing_cited_at_t`) and report an exact-only view
+(`citing_uncited`, C6).
+
+**What stays.** `forman_only` keeps the plan formulation and is the table's "old curvature" row; `plan_full` (not in
+the matrix) keeps the old `full`. The C6 control `ctl_coupling_share` ranks like raw `-orc_dir`: it is the component
+before the cell z, not an independent control, and the counting controls (citing and cited reference counts) are
+the baseline the curvature claim must beat.

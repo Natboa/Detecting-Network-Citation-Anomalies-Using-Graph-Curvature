@@ -1,5 +1,9 @@
 """SYNTHETIC dress rehearsal of the evaluation protocol (S3.4, S4.2-S4.6) on synthetic streams with planted cartels.
 
+Note 2026-11-26 (option A): the cell `full` now runs the closed-form directed ORC (no escalation), so the ORC and
+component-input diagnostics below that read `kept["full"]` see no escalated rows. The rehearsal report
+(docs/rehearsal_report.md) is the record of the plan formulation, whose `full` is the record cell `plan_full`.
+
 Every number this script produces comes from synthetic data (citecurv.data.synthetic + citecurv.eval.inject). None
 of it is a measurement on real citations; it tests the pipeline and the protocol, not the method's real value.
 
