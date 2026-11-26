@@ -662,6 +662,30 @@ def _shuffled_pair(fx):
     return base, shuf
 
 
+def test_closed_cell_keeps_fitted_objects_under_a_test_shuffle(fx):
+    """Final review of option A: the half of the shuffle gate that does not depend on the fixture's AUROC, on the
+    cell C5c gates (`full`, closed mode): shuffling test-period timestamps leaves every object fitted on train/val
+    rows unchanged (thresholds, ZStats, weights, cold-start statistics), coupling and orc_dir included."""
+    from citecurv.pipeline import _cold_fitted
+
+    base = run(fx)
+    ev = shuffle_test_timestamps(fx["events"], fx["meta"]["t_min"] - 1, seed=1)
+    shuf = run_pipeline(ev, fx["works"], authorships=fx["authorships"], embeddings=fx["embeddings"],
+                        event_labels=fx["event_labels"], cutoff=fx["meta"]["t_min"] - 1, variant="full", seed=0,
+                        cfg=cfg_small(), orc_fn=FakeORC())
+    assert base.metrics["curvature"]["mode"] == shuf.metrics["curvature"]["mode"] == "closed"
+    moved = (ev.set_index("event_id")["t"] != fx["events"].set_index("event_id")["t"]).sum()
+    assert moved > 0
+    assert shuf.thresholds == base.thresholds
+    assert shuf.zstats.to_dict() == base.zstats.to_dict()
+    assert shuf.weights == base.weights
+    assert _cold_fitted(shuf.metrics) == _cold_fitted(base.metrics)
+    pre = (base.split != "test").to_numpy()
+    b = base.curvature.set_index("event_id").loc[base.scores.loc[pre, "event_id"], "orc_dir"].to_numpy()
+    s_ = shuf.curvature.set_index("event_id").loc[base.scores.loc[pre, "event_id"], "orc_dir"].to_numpy()
+    assert np.array_equal(np.isnan(b), np.isnan(s_)) and np.allclose(b[~np.isnan(b)], s_[~np.isnan(s_)])
+
+
 def _with_auroc(res, value):
     import copy as _copy
 

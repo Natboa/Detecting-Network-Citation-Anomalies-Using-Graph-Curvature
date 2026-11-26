@@ -133,3 +133,16 @@ def test_report_child_starts_after_the_inputs_are_freed():
     assert len(c6) == 1
     assert c6[0].index("free_inputs()") < c6[0].index("citecurv.eval.report_s43")
 
+
+
+def test_run_tags_record_the_coupling_not_an_unused_orc_memo():
+    """Final review of option A: the closed cells read no ORC memo, so tags_for hashes a memo file only when one is
+    passed, and records the coupling (rows and a hash of its counts) that produced the scores; the shuffled run of
+    C5c records its own coupling."""
+    cells = dict(indexed_code_cells())
+    assert 'memo_path or EVAL / "orc_matrix.parquet"' not in cells[4]
+    assert "coupling_frame" in cells[4] and '"coupling": ' in cells[4]
+    assert "coupling_frame=shuf_coupling" in cells[20]
+    for i in (13, 14):
+        before_tags = cells[i].split("tags_for(")[0]
+        assert "coupling()" in before_tags, f"cell {i}: the coupling must exist before the first tags_for call"

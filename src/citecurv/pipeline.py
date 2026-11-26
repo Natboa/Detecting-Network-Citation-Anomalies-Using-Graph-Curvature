@@ -1037,8 +1037,9 @@ def precompute_matrix_orc(events, cutoff, rcfg, seeds, *, out_path, context=None
     """ORC values for every escalated row of every matrix cell, computed once, resumable (S4.3 plan, Task 3).
 
     events: events frame in any order (canonicalized here); cutoff: days since epoch, the split is built as
-    run_pipeline builds it (val_frac of rcfg). Targets = the screen set (cells full, no_temporal, full_learned)
-    united with the ollivier_only selection of every seed in `seeds` (one select_escalation code path), processed
+    run_pipeline builds it (val_frac of rcfg). Targets = the screen set (the cells full, no_temporal, full_learned
+    of the plan formulation, i.e. the record cell plan_full since option A of 2026-11-26; the closed-mode cells
+    need no ORC) united with the ollivier_only selection of every seed in `seeds` (one select_escalation code path), processed
     in a seeded random order (order_seed) so a chunk's timing is a fair running projection. An ORC cap
     (orc_max_events) is refused: its draw depends on the cell seed.
 
