@@ -31,7 +31,7 @@ Every task implicitly includes these. Violating one is a bug even if the task te
 
 - *(untagged)* — Claude does it end to end on this machine (Windows-safe or WSL2).
 - `[COLAB-RUN]` — Claude prepares the notebook/script completely; Maor presses run on Colab; outputs land on Drive/repo; Claude analyzes them next session.
-- `[HUMAN]` — only Maor/Gilboa can do it (accounts, money, advisors, manual review).
+- `[HUMAN]` — only Maor/Natboa can do it (accounts, money, advisors, manual review).
 
 ---
 
@@ -71,7 +71,7 @@ Tracked live in `PROGRESS.md`. Policy: proceed with the default, mark outputs `P
 | G3 | Sign-off on the positive-label rule (L12) | Maor → advisors | Referencing/Attributions family | Slice choice rationale (S1.3), all evaluation numbers (cheap to re-join: scores are stored, labels join afterwards) |
 | G4 | Audit Q1: is a solution-description section (pseudocode/flowcharts) required in the book? | Maor → advisors | Assume yes for the Phase B book; does not block implementation | Book-writing hooks in S4.9 |
 | G5 | Audit Q2: page-limit accounting for the Phase A book | Maor → advisors | Book track only | Nothing in this plan |
-| G6 | Repo visibility timing (public now vs. before first deliverable) | Maor + Gilboa | Public at creation | Nothing — private works for execution, link resolution waits |
+| G6 | Repo visibility timing (public now vs. before first deliverable) | Maor + Natboa | Public at creation | Nothing — private works for execution, link resolution waits |
 
 ## 3. Repository layout and conventions
 
@@ -146,7 +146,7 @@ Purpose: repo, keys, environment go/no-go, frozen labels. Exit criteria at the e
 
 **Steps:**
 - [ ] Create repo `Natboa/Detecting-Network-Citation-Anomalies-Using-Graph-Curvature` (exact name — the book's title-page link must resolve), MIT license, README stub. Public per G6 default (private acceptable until first deliverable).
-- [ ] Add Maor's account as collaborator if it lives under Gilboa's.
+- [ ] Add Maor's account as collaborator if it lives under Natboa's.
 
 **Verify:** `https://github.com/Natboa/Detecting-Network-Citation-Anomalies-Using-Graph-Curvature` returns 200 while logged out (or collaborators confirmed, if private for now).
 
@@ -595,7 +595,7 @@ Fair-comparison protocol (book 3.3): static detectors see the graph snapshot at 
 ### Task S4.7 `[HUMAN]` Top-50 manual review
 
 - [ ] Claude prepares the review packet: top 50 flagged test citations (full model, median seed), each with breakdown, endpoint titles/abstracts, links, and the category checklist from book 4.2.1 (cartel / forced self-citation / sneaked reference / paper-mill / other-suspicious / nothing).
-- [ ] Maor + Gilboa fill the log (split 25/25 or double-code 10 for agreement — their call, recorded).
+- [ ] Maor + Natboa fill the log (split 25/25 or double-code 10 for agreement — their call, recorded).
 - [ ] Claude ingests the log → review summary table.
 
 **Verify:** 50/50 rows filled; summary table in results pack.

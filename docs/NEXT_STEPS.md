@@ -20,10 +20,10 @@ changes the research plan (section 3).
 |---|------|-----|----------|
 | 1 | Register the OpenAlex key at `openalex.org/settings/api-key`; put it in Colab Secrets as `OPENALEX_API_KEY`; run `check_key()` once (`docs/colab_runbook.md` §9) | Maor | S1.1-live, S1.2, S1.3 |
 | 2 | Run `notebooks/00_smoke.ipynb` on Colab (Python 3.12 runtime, T4) | Maor | S0.5 gate on the real venue |
-| 3 | Advisor meeting — bring section 2 below | Maor + Gilboa | G3, the curvature question |
-| 4 | Agree the split of work with Gilboa (proposal in section 5) | Maor + Gilboa | parallel progress |
+| 3 | Advisor meeting — bring section 2 below | Maor + Natboa | G3, the curvature question |
+| 4 | Agree the split of work with Natboa (proposal in section 5) | Maor + Natboa | parallel progress |
 | 5 | Review and merge the session branch `claude/amazing-archimedes-1tu9ny` | Maor | everything below |
-| 6 | Optional, for future cloud sessions: allow `api.openalex.org` and `huggingface.co` in the cloud environment's network settings and install the Claude GitHub App on the repo | Maor / Gilboa | cloud sessions can pull data and push |
+| 6 | Optional, for future cloud sessions: allow `api.openalex.org` and `huggingface.co` in the cloud environment's network settings and install the Claude GitHub App on the repo | Maor / Natboa | cloud sessions can pull data and push |
 
 ## 2. Decisions waiting for Maor / the advisors
 
@@ -83,7 +83,7 @@ Ordered by impact. Each has a recorded default, so work does not stop while it i
 5. **Book:** Phase B chapters from the results pack; the explorer screenshots serve as figures for
    the explainability requirement (FR7).
 
-## 5. Suggested split with Gilboa
+## 5. Suggested split with Natboa
 
 - **Track A — data and representation:** OpenAlex pulls, labels, slice, SPECTER2, TGN training and
   inference (notebooks 10, 20, 40).

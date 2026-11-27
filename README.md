@@ -4,7 +4,7 @@ Capstone project 26-2-D-22, Software Engineering Department, Braude College of E
 
 The system detects anomalous citations in directed temporal citation networks by combining two signals: a temporal graph neural network (TGN via DyGLib, with SPECTER2-initialized node memory and bidirectional messaging) that learns what normal citation behavior looks like over time, and directed discrete Ricci curvature (a custom Forman-Ricci screen implemented from Saucan et al. 2019, with Ollivier-Ricci escalation via GraphRicciCurvature) that describes the local geometry of each citation edge. A citation is flagged when both views agree, and every score decomposes into named components a human reviewer can inspect.
 
-**Authors:** Maor Saban, Gilboa Natan · **Advisors:** Dr. Renata Avros, Prof. Zeev Volkovich
+**Authors:** Maor Saban, Natboa · **Advisors:** Dr. Renata Avros, Prof. Zeev Volkovich
 
 ## Repository map
 

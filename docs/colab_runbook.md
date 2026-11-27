@@ -1,6 +1,6 @@
 # Colab runbook
 
-Operator's guide for Maor and Gilboa: which notebook to run when, on which runtime, with which pins,
+Operator's guide for Maor and Natboa: which notebook to run when, on which runtime, with which pins,
 what survives a dead session, and what to write down afterwards. Written 2026-10-31 for the
 notebooks in this repository at the tag that contains this file. Anything that depends on an open
 decision is marked PROVISIONAL. Plan references (S0.4, 9.1, ...) are to `IMPLEMENTATION_PLAN.md`.
